@@ -437,6 +437,23 @@ def shell_quote_env(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
+def github_auth_bootstrap_script() -> str:
+    return """if [[ -z "${GITHUB_TOKEN:-}" && -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1; then
+  _leanmarathon_gh_token="$(gh auth token 2>/dev/null || true)"
+  if [[ -n "$_leanmarathon_gh_token" ]]; then
+    export GITHUB_TOKEN="$_leanmarathon_gh_token"
+    export GITHUB_PERSONAL_ACCESS_TOKEN="$_leanmarathon_gh_token"
+  fi
+  unset _leanmarathon_gh_token
+fi
+if [[ -n "${GITHUB_TOKEN:-}" && -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]]; then
+  export GITHUB_PERSONAL_ACCESS_TOKEN="$GITHUB_TOKEN"
+fi
+if [[ -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" && -z "${GITHUB_TOKEN:-}" ]]; then
+  export GITHUB_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"
+fi"""
+
+
 def auto_forward_args(args: argparse.Namespace, *, submit: bool) -> list[str]:
     forwarded = ["auto", "--owner", args.owner, "--repo", args.repo]
     forwarded.append("--submit" if submit else "--no-submit")
@@ -504,6 +521,7 @@ def submit_auto_job(args: argparse.Namespace, config: dict[str, Any]) -> int:
                 "set -euo pipefail",
                 *exports,
                 f"export PATH={shell_quote_env(DEFAULT_PATH)}:$PATH",
+                github_auth_bootstrap_script(),
                 f"cd {shell_quote_env(str(SYSTEM_ROOT))}",
                 f"exec {command_text}",
                 "",

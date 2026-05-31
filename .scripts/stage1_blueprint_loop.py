@@ -341,6 +341,7 @@ def make_reviewer_job_script(
 
 set +e
 export PATH={shlex.quote(PWL.AGENT_PATH)}
+{PWL.github_auth_bootstrap()}
 export VERIFY_BLUEPRINT_LEAN_THREADS={PWL.AGENT_CPUS}
 export LEAN_LSP_THREADS={PWL.AGENT_CPUS}
 export DAG_TRACKER_LEAN_THREADS={PWL.AGENT_CPUS}
@@ -911,6 +912,7 @@ def submit_self(args: argparse.Namespace) -> str:
 set -euo pipefail
 export PATH={shlex.quote(PWL.ORCH_PATH)}
 {env_exports}
+{PWL.github_auth_bootstrap()}
 export ORCHESTRATOR_SOURCE_ROOT={shlex.quote(str(SOURCE_ROOT))}
 export ORCHESTRATOR_LEAN_PROJECT_ROOT={shlex.quote(PWL.LEAN_PROJECT_ROOT_LABEL)}
 export ORCH_CPUS={PWL.ORCH_CPUS}

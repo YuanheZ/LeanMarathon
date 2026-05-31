@@ -795,6 +795,23 @@ def leanmarathon_env_exports() -> str:
     )
 
 
+def github_auth_bootstrap() -> str:
+    return """if [[ -z "${GITHUB_TOKEN:-}" && -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1; then
+  _leanmarathon_gh_token="$(gh auth token 2>/dev/null || true)"
+  if [[ -n "$_leanmarathon_gh_token" ]]; then
+    export GITHUB_TOKEN="$_leanmarathon_gh_token"
+    export GITHUB_PERSONAL_ACCESS_TOKEN="$_leanmarathon_gh_token"
+  fi
+  unset _leanmarathon_gh_token
+fi
+if [[ -n "${GITHUB_TOKEN:-}" && -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]]; then
+  export GITHUB_PERSONAL_ACCESS_TOKEN="$GITHUB_TOKEN"
+fi
+if [[ -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" && -z "${GITHUB_TOKEN:-}" ]]; then
+  export GITHUB_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"
+fi"""
+
+
 def make_agent_job_script(
     *,
     job_file: Path,
@@ -824,6 +841,7 @@ def make_agent_job_script(
 set +e
 export PATH={shlex.quote(AGENT_PATH)}
 {env_exports}
+{github_auth_bootstrap()}
 export AGENT_CPUS={AGENT_CPUS}
 export AGENT_TIME={shlex.quote(AGENT_TIME)}
 export LEANMARATHON_NUMERIC_TOOLS={shlex.quote(os.environ.get("LEANMARATHON_NUMERIC_TOOLS", ""))}
@@ -1760,6 +1778,7 @@ def submit_self(args: argparse.Namespace) -> str:
 set -euo pipefail
 export PATH={shlex.quote(ORCH_PATH)}
 {env_exports}
+{github_auth_bootstrap()}
 export ORCHESTRATOR_SOURCE_ROOT={shlex.quote(str(SOURCE_ROOT))}
 export ORCHESTRATOR_LEAN_PROJECT_ROOT={shlex.quote(LEAN_PROJECT_ROOT_LABEL)}
 export ORCH_CPUS={ORCH_CPUS}
