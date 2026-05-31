@@ -4,13 +4,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 usage() {
-  echo "Usage: bash $0 --branch <name> --config <path> [--extra <path>] [--owner <owner> --repo <repo>]"
+  echo "Usage: bash $0 --branch <name> --config <path> [--worktrees-root <path>] [--extra <path>] [--owner <owner> --repo <repo>]"
   echo ""
   echo "Required:"
   echo "  --branch <name>   Name for the new working branch"
   echo "  --config <path>   Directory whose contents are copied into the worktree"
   echo ""
   echo "Optional:"
+  echo "  --worktrees-root <path>  Directory that will contain created worktrees"
   echo "  --extra  <path>   Additional directory whose contents are copied into the worktree"
   echo "  --owner  <owner>  GitHub owner/org to push to (e.g. MyGitHubName)"
   echo "  --repo   <repo>   GitHub repo name to push to (e.g. LeanMarathon)"
@@ -18,13 +19,14 @@ usage() {
   echo "If --owner and --repo are both given, the local 'origin' remote"
   echo "must already point to https://github.com/<owner>/<repo>.git."
   echo ""
-  echo "How to clean: git worktree remove --force .worktrees/<name> && git branch -D <name> && git push origin --delete <name>"
+  echo "How to clean: git worktree remove --force <worktrees-root>/<name> && git branch -D <name> && git push origin --delete <name>"
   exit 1
 }
 
 BRANCH=""
 CONFIG_PATH=""
 EXTRA_PATH=""
+WORKTREES_ROOT=""
 OWNER=""
 REPO=""
 
@@ -32,6 +34,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --branch) BRANCH="${2:-}";       shift 2 ;;
     --config) CONFIG_PATH="${2:-}";  shift 2 ;;
+    --worktrees-root) WORKTREES_ROOT="${2:-}"; shift 2 ;;
     --extra)  EXTRA_PATH="${2:-}";   shift 2 ;;
     --owner)  OWNER="${2:-}";        shift 2 ;;
     --repo)   REPO="${2:-}";         shift 2 ;;
@@ -50,7 +53,12 @@ if [[ -n "$OWNER" && -z "$REPO" ]] || [[ -z "$OWNER" && -n "$REPO" ]]; then
   exit 1
 fi
 
-WORKTREE_DIR="${REPO_ROOT}/.worktrees/${BRANCH}"
+if [[ -z "$WORKTREES_ROOT" ]]; then
+  WORKTREES_ROOT="${REPO_ROOT}/.worktrees"
+fi
+mkdir -p "$WORKTREES_ROOT"
+WORKTREES_ROOT="$(cd "$WORKTREES_ROOT" && pwd)"
+WORKTREE_DIR="${WORKTREES_ROOT}/${BRANCH}"
 
 # Validate config path and resolve to absolute (so it survives `cd` later)
 if [[ ! -d "$CONFIG_PATH" ]]; then
@@ -89,6 +97,7 @@ git -C "$REPO_ROOT" fetch origin main
 
 # Create worktree, explicitly basing the new branch on the fetched main.
 echo "Creating worktree at ${WORKTREE_DIR} on branch '${BRANCH}' (from ${BASE_REF})..."
+mkdir -p "$(dirname "$WORKTREE_DIR")"
 git -C "$REPO_ROOT" worktree add "$WORKTREE_DIR" -b "$BRANCH" "$BASE_REF"
 
 # Enable sparse checkout (non-cone): only files under LeanMarathon/

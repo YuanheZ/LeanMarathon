@@ -40,8 +40,8 @@ Runtime data is kept outside committed target files:
 
 - `.orchestrator-repos/<owner>/<repo>/`: local per-target orchestration clone.
 - `.leanmarathon-targets/<owner>/<repo>/`: local target config and copied source inputs.
+- `.leanmarathon-targets/<owner>/<repo>/worktrees/`: per-branch agent worktrees, kept outside the target clone so accidental local `lake` commands cannot create `.lake` in the target repo.
 - `.orchestrator-runs/`: per-run audit logs, Slurm scripts, stdout/stderr.
-- `.worktrees/`: per-branch agent worktrees.
 - `.codex-session-home/`: isolated Codex session history.
 
 These runtime directories are ignored by the LeanMarathon system repo.

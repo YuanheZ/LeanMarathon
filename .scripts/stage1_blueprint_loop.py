@@ -100,13 +100,15 @@ def validate_stage1_paths(branch_main: str, worktrees_root: Path) -> None:
             "--branch-main must be 'main': .scripts/create-worktree.sh hardcodes origin/main "
             "and the agent PR delivery templates target base 'main'."
         )
-    expected = (REPO_ROOT / ".worktrees").resolve()
+    if not worktrees_root.is_absolute():
+        raise ValueError(f"--worktrees-root must be absolute, got {worktrees_root}")
     actual = worktrees_root.resolve()
-    if actual != expected:
-        raise ValueError(
-            f"--worktrees-root must resolve to {expected}; create-worktree.sh always uses that root. "
-            f"Got {actual}."
-        )
+    for parent in (actual, *actual.parents):
+        if (parent / "lakefile.toml").exists():
+            raise ValueError(
+                f"--worktrees-root must not be inside a Lake project; found {parent / 'lakefile.toml'} "
+                f"above {actual}. Put agent worktrees in external runtime state."
+            )
     for path in (CREATE_WORKTREE, BLUEPRINTER_CONFIG, REVIEWER_CONFIG, REFINER_CONFIG):
         if not path.exists():
             raise FileNotFoundError(path)
@@ -210,7 +212,7 @@ def preallocate_blueprinter(
     base_commit: str,
 ) -> dict[str, Any]:
     branch = "blueprint/init"
-    worktree = PWL.create_worktree(branch, BLUEPRINTER_CONFIG, owner, repo, base_commit)
+    worktree = PWL.create_worktree(branch, BLUEPRINTER_CONFIG, owner, repo, base_commit, worktrees_root=worktrees_root)
     PWL.ensure_problem_file(worktree, problem_file, base_commit)
     PWL.ensure_proof_file(worktree, proof_file, base_commit)
     patch_codex_config_for_agent(worktree, lean_file, allow_hook=True)
@@ -244,7 +246,7 @@ def preallocate_reviewer(
     base_commit: str,
 ) -> dict[str, Any]:
     branch = f"target-review/round-{round_id}"
-    worktree = PWL.create_worktree(branch, REVIEWER_CONFIG, owner, repo, base_commit)
+    worktree = PWL.create_worktree(branch, REVIEWER_CONFIG, owner, repo, base_commit, worktrees_root=worktrees_root)
     PWL.ensure_problem_file(worktree, problem_file, base_commit)
     patch_codex_config_for_agent(worktree, lean_file, allow_hook=False)
     write_reviewer_inputs(
@@ -278,7 +280,7 @@ def preallocate_stage1_refiner(
     issues: list[dict[str, Any]],
 ) -> dict[str, Any]:
     branch = f"blueprint-refiner/round-{round_id}"
-    worktree = PWL.create_worktree(branch, REFINER_CONFIG, owner, repo, base_commit)
+    worktree = PWL.create_worktree(branch, REFINER_CONFIG, owner, repo, base_commit, worktrees_root=worktrees_root)
     PWL.ensure_problem_file(worktree, problem_file, base_commit)
     PWL.ensure_proof_file(worktree, proof_file, base_commit)
     PWL.render_issue_context(worktree, owner, repo, issues)
@@ -840,7 +842,7 @@ def delegated_submit_self(args: argparse.Namespace) -> str | None:
         "--proof-file",
         copy_runtime_input_to_target(args.proof_file, target_root),
     )
-    forwarded = PWL.set_forwarded_option(forwarded, "--worktrees-root", str(target_root / ".worktrees"))
+    forwarded = PWL.set_forwarded_option(forwarded, "--worktrees-root", str(PWL.target_worktrees_root(args.owner, args.repo)))
     forwarded = PWL.remove_forwarded_option(forwarded, "--audit-dir")
 
     env = os.environ.copy()

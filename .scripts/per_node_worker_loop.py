@@ -251,13 +251,15 @@ def validate_paths(branch_main: str, worktrees_root: Path) -> None:
             "--branch-main must be 'main': .scripts/create-worktree.sh hardcodes origin/main "
             "and the agent PR delivery templates target base 'main'."
         )
-    expected = (REPO_ROOT / ".worktrees").resolve()
+    if not worktrees_root.is_absolute():
+        raise ValueError(f"--worktrees-root must be absolute, got {worktrees_root}")
     actual = worktrees_root.resolve()
-    if actual != expected:
-        raise ValueError(
-            f"--worktrees-root must resolve to {expected}; create-worktree.sh always uses that root. "
-            f"Got {actual}."
-        )
+    for parent in (actual, *actual.parents):
+        if (parent / "lakefile.toml").exists():
+            raise ValueError(
+                f"--worktrees-root must not be inside a Lake project; found {parent / 'lakefile.toml'} "
+                f"above {actual}. Put agent worktrees in external runtime state."
+            )
     for path in (CREATE_WORKTREE, VERIFY_BLUEPRINT, WORKER_CONFIG, REFINER_CONFIG):
         if not path.exists():
             raise FileNotFoundError(path)
@@ -419,8 +421,17 @@ def dynamic_leaves(dag: ProofDag) -> list[ProofNode]:
     return [node for node in unproven if node.deps.isdisjoint(unproven_names)]
 
 
-def create_worktree(branch: str, config_dir: Path, owner: str, repo: str, base_commit: str) -> Path:
-    worktree = REPO_ROOT / ".worktrees" / branch
+def create_worktree(
+    branch: str,
+    config_dir: Path,
+    owner: str,
+    repo: str,
+    base_commit: str,
+    *,
+    worktrees_root: Path | None = None,
+) -> Path:
+    root = (worktrees_root or (REPO_ROOT / ".worktrees")).resolve()
+    worktree = root / branch
     if worktree.exists():
         raise FileExistsError(f"worktree already exists: {worktree}")
     worktree.parent.mkdir(parents=True, exist_ok=True)
@@ -433,6 +444,8 @@ def create_worktree(branch: str, config_dir: Path, owner: str, repo: str, base_c
             branch,
             "--config",
             str(config_dir),
+            "--worktrees-root",
+            str(root),
             "--owner",
             owner,
             "--repo",
@@ -1217,7 +1230,7 @@ def preallocate_worker(
     base_commit: str,
 ) -> dict[str, Any]:
     branch = f"round-{round_id}/{branch_slug(target_node)}"
-    worktree = create_worktree(branch, WORKER_CONFIG, owner, repo, base_commit)
+    worktree = create_worktree(branch, WORKER_CONFIG, owner, repo, base_commit, worktrees_root=worktrees_root)
     ensure_problem_file(worktree, problem_file, base_commit)
     patch_codex_config(worktree, lean_file, target_node=target_node)
     write_worker_inputs(
@@ -1253,7 +1266,7 @@ def preallocate_refiner(
 ) -> dict[str, Any]:
     round_match = re.fullmatch(r"round-(\d+)", tag)
     branch = f"refiner/round-{round_match.group(1)}" if round_match else f"refiner/{branch_slug(tag)}"
-    worktree = create_worktree(branch, REFINER_CONFIG, owner, repo, base_commit)
+    worktree = create_worktree(branch, REFINER_CONFIG, owner, repo, base_commit, worktrees_root=worktrees_root)
     ensure_problem_file(worktree, problem_file, base_commit)
     ensure_proof_file(worktree, proof_file, base_commit)
     render_issue_context(worktree, owner, repo, issues)
@@ -1670,6 +1683,10 @@ def target_orchestration_root(owner: str, repo: str) -> Path:
     return SOURCE_ROOT / ".orchestrator-repos" / branch_slug(owner) / branch_slug(repo)
 
 
+def target_worktrees_root(owner: str, repo: str) -> Path:
+    return SOURCE_ROOT / ".leanmarathon-targets" / branch_slug(owner) / branch_slug(repo) / "worktrees"
+
+
 def copy_path_fresh(source: Path, dest: Path) -> None:
     if not source.exists():
         raise FileNotFoundError(source)
@@ -1785,7 +1802,7 @@ def delegated_submit_self(args: argparse.Namespace) -> str | None:
         "--proof-file",
         copy_runtime_input_to_target(args.proof_file, target_root),
     )
-    forwarded = set_forwarded_option(forwarded, "--worktrees-root", str(target_root / ".worktrees"))
+    forwarded = set_forwarded_option(forwarded, "--worktrees-root", str(target_worktrees_root(args.owner, args.repo)))
     forwarded = remove_forwarded_option(forwarded, "--audit-dir")
 
     env = os.environ.copy()
