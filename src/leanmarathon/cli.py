@@ -13,7 +13,11 @@ from typing import Any
 
 
 SYSTEM_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_LEAN_PROJECT_ROOT = Path(os.environ.get("LEANMARATHON_LEAN_PROJECT_ROOT", str(SYSTEM_ROOT)))
+DEFAULT_LEAN_PROJECT_ROOT = (
+    Path(os.environ["LEANMARATHON_LEAN_PROJECT_ROOT"]).expanduser().resolve()
+    if os.environ.get("LEANMARATHON_LEAN_PROJECT_ROOT")
+    else None
+)
 DEFAULT_PATH = os.pathsep.join(
     item
     for item in [
@@ -341,7 +345,14 @@ def ensure_git_identity(root: Path) -> None:
 def command_init(args: argparse.Namespace) -> int:
     owner = args.owner
     repo = args.repo
+    if not args.lean_project_root:
+        raise SystemExit("--lean-project-root is required unless LEANMARATHON_LEAN_PROJECT_ROOT is set")
     lean_project_root = Path(args.lean_project_root).expanduser().resolve()
+    if not lean_project_root.is_dir():
+        raise SystemExit(f"Lean project root does not exist: {lean_project_root}")
+    for name in ("lakefile.toml", "lake-manifest.json", "lean-toolchain"):
+        if not (lean_project_root / name).exists():
+            raise SystemExit(f"Lean project root is missing {name}: {lean_project_root}")
     problem_src = Path(args.problem_file).expanduser().resolve()
     proof_src = Path(args.proof_file).expanduser().resolve()
     if not problem_src.exists():
@@ -385,7 +396,11 @@ def command_init(args: argparse.Namespace) -> int:
 
 
 def orchestrator_env(config: dict[str, Any]) -> dict[str, str]:
-    lean_project_root = str(cfg_get(config, ("project", "lean_project_root"), DEFAULT_LEAN_PROJECT_ROOT))
+    lean_project_root = cfg_get(config, ("project", "lean_project_root"), None)
+    if not lean_project_root:
+        if DEFAULT_LEAN_PROJECT_ROOT is None:
+            raise SystemExit("missing project.lean_project_root in .leanmarathon/config.toml")
+        lean_project_root = str(DEFAULT_LEAN_PROJECT_ROOT)
     numeric_tools = cfg_get(config, ("capabilities", "numeric_tools"), [])
     return {
         "ORCHESTRATOR_SOURCE_ROOT": str(SYSTEM_ROOT),
@@ -813,7 +828,12 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--target-problem-file")
     init.add_argument("--target-proof-file")
     init.add_argument("--lean-file", default="LeanMarathon/Main.lean")
-    init.add_argument("--lean-project-root", default=str(DEFAULT_LEAN_PROJECT_ROOT))
+    init.add_argument(
+        "--lean-project-root",
+        default=str(DEFAULT_LEAN_PROJECT_ROOT) if DEFAULT_LEAN_PROJECT_ROOT is not None else None,
+        required=DEFAULT_LEAN_PROJECT_ROOT is None,
+        help="absolute path to the user's Lean project root containing lakefile.toml",
+    )
     init.add_argument("--public", action="store_true")
     init.add_argument("--orchestrator-resource", choices=("cpu", "gpu"), default="gpu")
     init.add_argument("--orchestrator-cpus", type=int, default=42)

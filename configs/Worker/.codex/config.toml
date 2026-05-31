@@ -29,7 +29,7 @@ tool_timeout_sec = 600
 default_tools_approval_mode = "approve"
 
 [mcp_servers.lean-lsp-mcp]
-command = "python3"
+command = "__LEANMARATHON_PYTHON__"
 args = ["-m", "lean_lsp_mcp", "--lean-project-path", "__LEANMARATHON_ROOT__/lakefile.toml", "--repl", "--repl-timeout", "600"]
 startup_timeout_sec = 120
 tool_timeout_sec = 600
@@ -37,7 +37,7 @@ enabled_tools = ["lean_diagnostic_messages", "lean_goal", "lean_multi_attempt", 
 default_tools_approval_mode = "approve"
 
 [mcp_servers.lean-lsp-mcp.env]
-PATH = "__LEANMARATHON_ELAN_PATH__"
+PATH = "__LEANMARATHON_PATH__"
 
 [mcp_servers.github]
 command = "github-mcp-server"
@@ -73,7 +73,7 @@ GIT_CONFIG_VALUE_3 = "never"
 GIT_TERMINAL_PROMPT = "0"
 
 [mcp_servers.apply-patch]
-command = "python3"
+command = "__LEANMARATHON_PYTHON__"
 args = ["__LEANMARATHON_APPLY_PATCH_MCP__"]
 startup_timeout_sec = 120
 tool_timeout_sec = 600
@@ -88,7 +88,7 @@ APPLY_PATCH_NODE = "weighted_tail_bound_polynomial"
 PYTHONUTF8 = "1"
 
 [mcp_servers.dag-tracker]
-command = "python3"
+command = "__LEANMARATHON_PYTHON__"
 args = ["__LEANMARATHON_DAG_TRACKER_MCP__"]
 startup_timeout_sec = 120
 tool_timeout_sec = 600
@@ -98,5 +98,5 @@ default_tools_approval_mode = "approve"
 [mcp_servers.dag-tracker.env]
 DAG_PROJECT_ROOT = "__LEANMARATHON_ROOT__"
 DAG_TARGET_FILE = "__DAG_TARGET_FILE__"
-PATH = "__LEANMARATHON_ELAN_PATH__"
+PATH = "__LEANMARATHON_PATH__"
 PYTHONUTF8 = "1"

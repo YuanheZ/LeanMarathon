@@ -59,8 +59,11 @@ LeanMarathon v0.1 expects these tool versions:
 | `github-mcp-server` | `0.32.0` |
 | `git-mcp-server` | `2.10.5` |
 
-Lean itself is user-provided. LeanMarathon does not pin the Lean installation;
-the user supplies the Lean/Lake/Elan path through environment variables.
+Lean itself is user-provided. LeanMarathon does not pin the Lean installation.
+At `leanmarathon init` time, pass `--lean-project-root` pointing to the Lean
+project whose `lakefile.toml`, `lake-manifest.json`, `lean-toolchain`, and
+`.lake` cache should be used. LeanMarathon copies the Lake metadata into the
+target repo for CI and points Lean MCP/DAG tooling at that same project root.
 
 Required Python PDF packages:
 
@@ -146,6 +149,7 @@ Initialize a private target repository:
 leanmarathon init \
   --owner MyGitHubName \
   --repo MyTargetRepo \
+  --lean-project-root /absolute/path/to/lean-project \
   --problem-file /absolute/path/to/problem.txt \
   --proof-file /absolute/path/to/proof-source \
   --orchestrator-resource gpu \
