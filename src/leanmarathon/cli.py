@@ -214,6 +214,9 @@ def write_target_gitignore(root: Path) -> None:
                 "!.github/workflows/",
                 "!.github/workflows/verify-blueprint.yml",
                 "!.github/workflows/warmup-cache.yml",
+                "# Trusted CI helper used by verify-blueprint.yml.",
+                "!.scripts/",
+                "!.scripts/verify_blueprint.py",
                 "",
             ]
         ),
@@ -403,6 +406,7 @@ def copy_core_project_files(root: Path, lean_project_root: Path) -> None:
     workflows = root / ".github" / "workflows"
     copy_path_fresh(SYSTEM_ROOT / "workflows" / "verify-blueprint.yml", workflows / "verify-blueprint.yml")
     copy_path_fresh(SYSTEM_ROOT / "workflows" / "warmup-cache.yml", workflows / "warmup-cache.yml")
+    copy_path_fresh(SYSTEM_ROOT / ".scripts" / "verify_blueprint.py", root / ".scripts" / "verify_blueprint.py")
 
 
 def commit_and_push_initial(root: Path) -> None:

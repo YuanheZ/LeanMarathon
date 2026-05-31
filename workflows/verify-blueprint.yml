@@ -75,7 +75,9 @@ jobs:
             exit 2
           fi
 
-      # 4. Detect changed blueprint files; grep the PR's tree for @[blueprint.
+      # 4. Detect changed blueprint files; grep the PR's tree for Lean's
+      #    accepted blueprint attribute spelling, including whitespace after
+      #    `@[`.
       - name: Detect blueprint files in PR
         id: detect
         env:
@@ -89,7 +91,7 @@ jobs:
             [[ -z "$f" ]] && continue
             # Inspect the PR's version of the file (fetched above).
             content=$(git show "$HEAD_SHA:$f" 2>/dev/null || true)
-            if grep -q '@\[blueprint' <<< "$content"; then
+            if grep -Eq '@\[[[:space:]]*blueprint' <<< "$content"; then
               blueprint_files+=("$f")
             fi
           done <<< "$changed"
