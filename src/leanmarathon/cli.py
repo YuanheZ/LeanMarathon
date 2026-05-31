@@ -280,6 +280,9 @@ def write_project_config(
     auto_resource: str,
     auto_cpus: int,
     auto_time: str,
+    stage1_orchestrator_resource: str,
+    stage1_orchestrator_cpus: int,
+    stage1_orchestrator_time: str,
     orchestrator_resource: str,
     orchestrator_cpus: int,
     orchestrator_time: str,
@@ -312,7 +315,12 @@ def write_project_config(
                 f"cpus = {auto_cpus}",
                 f"time = {toml_quote(auto_time)}",
                 "",
-                "[hpc.orchestrator]",
+                "[hpc.stage1_orchestrator]",
+                f"resource = {toml_quote(stage1_orchestrator_resource)}",
+                f"cpus = {stage1_orchestrator_cpus}",
+                f"time = {toml_quote(stage1_orchestrator_time)}",
+                "",
+                "[hpc.stage2_orchestrator]",
                 f"resource = {toml_quote(orchestrator_resource)}",
                 f"cpus = {orchestrator_cpus}",
                 f"time = {toml_quote(orchestrator_time)}",
@@ -463,6 +471,9 @@ def command_init(args: argparse.Namespace) -> int:
         auto_resource=args.auto_resource,
         auto_cpus=args.auto_cpus,
         auto_time=args.auto_time,
+        stage1_orchestrator_resource=args.stage1_orchestrator_resource,
+        stage1_orchestrator_cpus=args.stage1_orchestrator_cpus,
+        stage1_orchestrator_time=args.stage1_orchestrator_time,
         orchestrator_resource=args.orchestrator_resource,
         orchestrator_cpus=args.orchestrator_cpus,
         orchestrator_time=args.orchestrator_time,
@@ -480,14 +491,34 @@ def command_init(args: argparse.Namespace) -> int:
     return 0
 
 
-def orchestrator_env(config: dict[str, Any]) -> dict[str, str]:
+def stage_orchestrator_values(config: dict[str, Any], stage: str) -> tuple[str, str, str]:
+    if stage == "stage1":
+        section = "stage1_orchestrator"
+        fallback = {"resource": "cpu", "cpus": 1, "time": "48:00:00"}
+    elif stage == "stage2":
+        section = "stage2_orchestrator"
+        fallback = {
+            "resource": cfg_get(config, ("hpc", "orchestrator", "resource"), "cpu"),
+            "cpus": cfg_get(config, ("hpc", "orchestrator", "cpus"), 8),
+            "time": cfg_get(config, ("hpc", "orchestrator", "time"), "48:00:00"),
+        }
+    else:
+        raise ValueError(f"unknown stage: {stage}")
+    return (
+        str(cfg_get(config, ("hpc", section, "resource"), fallback["resource"])),
+        str(cfg_get(config, ("hpc", section, "cpus"), fallback["cpus"])),
+        str(cfg_get(config, ("hpc", section, "time"), fallback["time"])),
+    )
+
+
+def runtime_env(config: dict[str, Any]) -> dict[str, str]:
     lean_project_root = cfg_get(config, ("project", "lean_project_root"), None)
     if not lean_project_root:
         if DEFAULT_LEAN_PROJECT_ROOT is None:
             raise SystemExit("missing project.lean_project_root in LeanMarathon target config")
         lean_project_root = str(DEFAULT_LEAN_PROJECT_ROOT)
     numeric_tools = cfg_get(config, ("capabilities", "numeric_tools"), [])
-    env = {
+    return {
         "ORCHESTRATOR_SOURCE_ROOT": str(SYSTEM_ROOT),
         "ORCHESTRATOR_LEAN_PROJECT_ROOT": lean_project_root,
         "LEANMARATHON_VENV_BIN": LOCAL_VENV_BIN,
@@ -498,13 +529,20 @@ def orchestrator_env(config: dict[str, Any]) -> dict[str, str]:
         "LEANMARATHON_SLURM_GPU_PARTITION": LOCAL_SLURM_GPU_PARTITION,
         "LEANMARATHON_SLURM_GPU_GRES": LOCAL_SLURM_GPU_GRES,
         "LEANMARATHON_SLURM_MEM_PER_CPU": LOCAL_SLURM_MEM_PER_CPU,
-        "ORCH_RESOURCE_MODE": str(cfg_get(config, ("hpc", "orchestrator", "resource"), "cpu")),
-        "ORCH_CPUS": str(cfg_get(config, ("hpc", "orchestrator", "cpus"), 8)),
-        "ORCH_TIME": str(cfg_get(config, ("hpc", "orchestrator", "time"), "48:00:00")),
+        "LEANMARATHON_NUMERIC_TOOLS": ",".join(str(item) for item in numeric_tools),
+    }
+
+
+def orchestrator_env(config: dict[str, Any], *, stage: str = "stage2") -> dict[str, str]:
+    orch_resource, orch_cpus, orch_time = stage_orchestrator_values(config, stage)
+    env = {
+        **runtime_env(config),
+        "ORCH_RESOURCE_MODE": orch_resource,
+        "ORCH_CPUS": orch_cpus,
+        "ORCH_TIME": orch_time,
         "AGENT_RESOURCE_MODE": str(cfg_get(config, ("hpc", "agent", "resource"), "cpu")),
         "AGENT_CPUS": str(cfg_get(config, ("hpc", "agent", "cpus"), 16)),
         "AGENT_TIME": str(cfg_get(config, ("hpc", "agent", "time"), "4:00:00")),
-        "LEANMARATHON_NUMERIC_TOOLS": ",".join(str(item) for item in numeric_tools),
     }
     if LOCAL_AGENT_PATH:
         env["LEANMARATHON_AGENT_PATH"] = LOCAL_AGENT_PATH
@@ -573,7 +611,7 @@ def auto_forward_args(args: argparse.Namespace, *, submit: bool) -> list[str]:
 
 
 def submit_auto_job(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    env = orchestrator_env(config)
+    env = runtime_env(config)
     resource = str(cfg_get(config, ("hpc", "auto", "resource"), "cpu"))
     account = slurm_account(resource)
     account_line = f"#SBATCH --account={account}" if account else ""
@@ -708,6 +746,7 @@ def script_command_from_config(
 ) -> tuple[list[str], dict[str, str]]:
     config = load_target_config(owner, repo)
     project = config["project"]
+    stage = "stage1" if script_name == "stage1_blueprint_loop.py" else "stage2"
     command = [
         sys.executable,
         str(SYSTEM_ROOT / ".scripts" / script_name),
@@ -725,7 +764,7 @@ def script_command_from_config(
     ]
     if submit:
         command.append("--submit-self")
-    return command, orchestrator_env(config)
+    return command, orchestrator_env(config, stage=stage)
 
 
 def parse_slurm_job_id(text: str) -> str:
@@ -946,6 +985,9 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--auto-resource", choices=("cpu", "gpu"), default="cpu")
     init.add_argument("--auto-cpus", type=int, default=1)
     init.add_argument("--auto-time", default="48:00:00")
+    init.add_argument("--stage1-orchestrator-resource", choices=("cpu", "gpu"), default="cpu")
+    init.add_argument("--stage1-orchestrator-cpus", type=int, default=1)
+    init.add_argument("--stage1-orchestrator-time", default="48:00:00")
     init.add_argument("--orchestrator-resource", choices=("cpu", "gpu"), default="gpu")
     init.add_argument("--orchestrator-cpus", type=int, default=42)
     init.add_argument("--orchestrator-time", default="48:00:00")

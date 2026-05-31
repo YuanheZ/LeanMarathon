@@ -287,7 +287,12 @@ resource = "cpu"
 cpus = 1
 time = "48:00:00"
 
-[hpc.orchestrator]
+[hpc.stage1_orchestrator]
+resource = "cpu"
+cpus = 1
+time = "48:00:00"
+
+[hpc.stage2_orchestrator]
 resource = "gpu"
 cpus = 42
 time = "48:00:00"
