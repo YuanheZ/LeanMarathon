@@ -35,6 +35,17 @@ KEYWORD_TO_LATEX_ENV: dict[str, str] = {
 ALLOWED_LATEX_ENV = {"definition", "lemma", "theorem"}
 
 
+def lean_project_cwd() -> Path:
+    for env_name in ("VERIFY_BLUEPRINT_LEAN_PROJECT_ROOT", "ORCHESTRATOR_LEAN_PROJECT_ROOT"):
+        raw = os.environ.get(env_name)
+        if not raw:
+            continue
+        path = Path(raw).expanduser()
+        if path.is_dir():
+            return path.resolve()
+    return Path.cwd()
+
+
 @dataclass
 class Node:
     file: str
@@ -1023,7 +1034,7 @@ open Lean Architect
         lean_cmd.extend(["--", str(tmp_path)])
         proc = subprocess.run(
             lean_cmd,
-            cwd=Path.cwd(),
+            cwd=lean_project_cwd(),
             text=True,
             capture_output=True,
             timeout=3600,

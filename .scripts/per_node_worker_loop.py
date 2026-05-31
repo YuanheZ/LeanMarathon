@@ -1793,7 +1793,7 @@ def delegated_submit_self(args: argparse.Namespace) -> str | None:
     env["ORCHESTRATOR_LEAN_PROJECT_ROOT"] = LEAN_PROJECT_ROOT_LABEL
     proc = subprocess.run(
         [PYTHON_BIN, str(target_root / ".scripts" / "per_node_worker_loop.py"), *forwarded],
-        cwd=str(target_root),
+        cwd=str(LEAN_PROJECT_ROOT),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1864,7 +1864,7 @@ export AGENT_CPUS={AGENT_CPUS}
 export AGENT_TIME={shlex.quote(AGENT_TIME)}
 export AGENT_RESOURCE_MODE={shlex.quote(args.agent_resource)}
 export LEANMARATHON_NUMERIC_TOOLS={shlex.quote(os.environ.get("LEANMARATHON_NUMERIC_TOOLS", ""))}
-cd {shlex.quote(str(REPO_ROOT))}
+cd {shlex.quote(str(LEAN_PROJECT_ROOT))}
 exec {command}
 """
     script_path.write_text(script, encoding="utf-8")
