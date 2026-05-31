@@ -106,6 +106,10 @@ def target_root(owner: str, repo: str) -> Path:
     return SYSTEM_ROOT / ".orchestrator-repos" / owner / repo
 
 
+def target_state_root(owner: str, repo: str) -> Path:
+    return SYSTEM_ROOT / ".leanmarathon-targets" / owner / repo
+
+
 def copy_path_fresh(source: Path, dest: Path) -> None:
     if not source.exists():
         raise FileNotFoundError(source)
@@ -121,6 +125,15 @@ def copy_path_fresh(source: Path, dest: Path) -> None:
         shutil.copy2(source, dest)
 
 
+def remove_path(path: Path) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
 def rel_to_source(path: Path, source_root: Path) -> str:
     try:
         return str(path.resolve().relative_to(source_root.resolve()))
@@ -128,10 +141,10 @@ def rel_to_source(path: Path, source_root: Path) -> str:
         return path.name
 
 
-def default_target_proof_path(proof_file: Path) -> str:
+def default_runtime_proof_path(proof_file: Path) -> str:
     if proof_file.is_dir():
-        return "source/proof"
-    return f"source/proof/{proof_file.name}"
+        return "inputs/proof"
+    return f"inputs/proof/{proof_file.name}"
 
 
 def write_text_if_changed(path: Path, text: str) -> None:
@@ -156,13 +169,6 @@ def write_target_gitignore(root: Path) -> None:
                 "!lean-toolchain",
                 "!LeanMarathon/",
                 "!LeanMarathon/**",
-                "",
-                "# Source inputs and LeanMarathon config.",
-                "!source/",
-                "!source/**",
-                "!.leanmarathon/",
-                "!.leanmarathon/**",
-                "",
                 "# CI.",
                 "!.github/",
                 "!.github/workflows/",
@@ -233,7 +239,7 @@ def write_project_config(
     numeric_tools: list[str],
 ) -> None:
     write_text_if_changed(
-        root / ".leanmarathon" / "config.toml",
+        root / "config.toml",
         "\n".join(
             [
                 "[github]",
@@ -273,11 +279,22 @@ def write_project_config(
 
 
 def load_config(root: Path) -> dict[str, Any]:
-    path = root / ".leanmarathon" / "config.toml"
+    path = root / "config.toml"
+    if not path.exists():
+        legacy = root / ".leanmarathon" / "config.toml"
+        if legacy.exists():
+            path = legacy
     if not path.exists():
         raise SystemExit(f"missing LeanMarathon config: {path}")
     with path.open("rb") as handle:
         return tomllib.load(handle)
+
+
+def load_target_config(owner: str, repo: str) -> dict[str, Any]:
+    state_path = target_state_root(owner, repo)
+    if (state_path / "config.toml").exists():
+        return load_config(state_path)
+    return load_config(target_root(owner, repo))
 
 
 def cfg_get(config: dict[str, Any], path: tuple[str, ...], default: Any = None) -> Any:
@@ -362,22 +379,28 @@ def command_init(args: argparse.Namespace) -> int:
     ensure_github_repo(owner, repo, private=not args.public)
     root = ensure_target_clone(owner, repo)
 
-    target_problem = args.target_problem_file or "source/problem.txt"
-    target_proof = args.target_proof_file or default_target_proof_path(proof_src)
+    state_root = target_state_root(owner, repo)
+    state_root.mkdir(parents=True, exist_ok=True)
+    target_problem = args.target_problem_file or "inputs/problem.txt"
+    target_proof = args.target_proof_file or default_runtime_proof_path(proof_src)
     numeric_tools = normalize_repeated(args.numeric_tool)
 
     copy_core_project_files(root, lean_project_root)
     write_target_gitignore(root)
+    remove_path(root / "source")
+    remove_path(root / ".leanmarathon")
     write_base_lean(root, args.lean_file)
-    copy_path_fresh(problem_src, root / target_problem)
-    copy_path_fresh(proof_src, root / target_proof)
+    runtime_problem = (state_root / target_problem).resolve()
+    runtime_proof = (state_root / target_proof).resolve()
+    copy_path_fresh(problem_src, runtime_problem)
+    copy_path_fresh(proof_src, runtime_proof)
     write_project_config(
-        root,
+        state_root,
         owner=owner,
         repo=repo,
         lean_file=args.lean_file,
-        problem_file=target_problem,
-        proof_file=target_proof,
+        problem_file=str(runtime_problem),
+        proof_file=str(runtime_proof),
         orchestrator_resource=args.orchestrator_resource,
         orchestrator_cpus=args.orchestrator_cpus,
         orchestrator_time=args.orchestrator_time,
@@ -399,7 +422,7 @@ def orchestrator_env(config: dict[str, Any]) -> dict[str, str]:
     lean_project_root = cfg_get(config, ("project", "lean_project_root"), None)
     if not lean_project_root:
         if DEFAULT_LEAN_PROJECT_ROOT is None:
-            raise SystemExit("missing project.lean_project_root in .leanmarathon/config.toml")
+            raise SystemExit("missing project.lean_project_root in LeanMarathon target config")
         lean_project_root = str(DEFAULT_LEAN_PROJECT_ROOT)
     numeric_tools = cfg_get(config, ("capabilities", "numeric_tools"), [])
     return {
@@ -540,8 +563,7 @@ def submit_auto_job(args: argparse.Namespace, config: dict[str, Any]) -> int:
 
 
 def command_auto(args: argparse.Namespace) -> int:
-    root = target_root(args.owner, args.repo)
-    config = load_config(root)
+    config = load_target_config(args.owner, args.repo)
     if args.submit:
         return submit_auto_job(args, config)
 
@@ -613,8 +635,7 @@ def script_command_from_config(
     extra_args: list[str],
     submit: bool,
 ) -> tuple[list[str], dict[str, str]]:
-    root = target_root(owner, repo)
-    config = load_config(root)
+    config = load_target_config(owner, repo)
     project = config["project"]
     command = [
         sys.executable,
@@ -713,8 +734,7 @@ def submit_stage_and_wait(
 
 
 def command_stage1_run(args: argparse.Namespace) -> int:
-    root = target_root(args.owner, args.repo)
-    config = load_config(root)
+    config = load_target_config(args.owner, args.repo)
     extra = [
         "--max-review-rounds",
         str(args.max_review_rounds or cfg_get(config, ("stage1", "max_review_rounds"), 20)),
@@ -735,8 +755,7 @@ def command_stage1_run(args: argparse.Namespace) -> int:
 
 
 def command_stage2_run(args: argparse.Namespace) -> int:
-    root = target_root(args.owner, args.repo)
-    config = load_config(root)
+    config = load_target_config(args.owner, args.repo)
     extra = [
         "--n",
         str(args.n or cfg_get(config, ("hpc", "agent", "batch_size"), 16)),
@@ -798,7 +817,7 @@ def command_doctor(args: argparse.Namespace) -> int:
         ok = False
 
     if args.owner and args.repo:
-        config = load_config(target_root(args.owner, args.repo))
+        config = load_target_config(args.owner, args.repo)
         configured_numeric = [str(item) for item in cfg_get(config, ("capabilities", "numeric_tools"), [])]
     else:
         configured_numeric = []

@@ -5,6 +5,7 @@ __pycache__/
 .lake
 .lake/
 .orchestrator-repos/
+.leanmarathon-targets/
 .orchestrator-runs/
 .worktrees/
 .codex-session-home/

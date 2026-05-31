@@ -2,8 +2,8 @@
 
 LeanMarathon uses Slurm for the orchestrator and every agent job.
 
-The generated target repo stores resource shape settings in
-`.leanmarathon/config.toml`:
+LeanMarathon stores resource shape settings in the local runtime config:
+`.leanmarathon-targets/<owner>/<repo>/config.toml`.
 
 ```toml
 [hpc.orchestrator]

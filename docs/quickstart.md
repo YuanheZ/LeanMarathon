@@ -6,12 +6,15 @@
 leanmarathon init \
   --owner MyGitHubName \
   --repo MyTargetRepo \
+  --lean-project-root /absolute/path/to/lean-project \
   --problem-file /absolute/path/to/problem.txt \
   --proof-file /absolute/path/to/proof-source
 ```
 
-This creates a private GitHub repo, writes `.leanmarathon/config.toml`, copies
-the source inputs, installs the CI workflows, and pushes `main`.
+This creates a private GitHub repo, writes local runtime config and input
+copies under `.leanmarathon-targets/<owner>/<repo>/`, installs the CI workflows,
+and pushes `main`. The target GitHub repo does not commit source inputs or
+LeanMarathon runtime config.
 
 ## 2. Run End To End
 

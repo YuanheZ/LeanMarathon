@@ -32,8 +32,6 @@ and a small target config file, not the orchestration scripts directly.
 repo receives:
 
 - `LeanMarathon/Main.lean`: the Lean blueprint/proof file.
-- `source/`: copied problem and proof source files.
-- `.leanmarathon/config.toml`: target-specific orchestration settings.
 - `.github/workflows/verify-blueprint.yml`: CI gate for blueprint PRs.
 - `.github/workflows/warmup-cache.yml`: optional Lean cache warmup workflow.
 - `lakefile.toml`, `lake-manifest.json`, and `lean-toolchain`.
@@ -41,6 +39,7 @@ repo receives:
 Runtime data is kept outside committed target files:
 
 - `.orchestrator-repos/<owner>/<repo>/`: local per-target orchestration clone.
+- `.leanmarathon-targets/<owner>/<repo>/`: local target config and copied source inputs.
 - `.orchestrator-runs/`: per-run audit logs, Slurm scripts, stdout/stderr.
 - `.worktrees/`: per-branch agent worktrees.
 - `.codex-session-home/`: isolated Codex session history.
@@ -165,9 +164,9 @@ leanmarathon init \
 By default the GitHub repo is private. Add `--public` only when you intend to
 create a public target repo.
 
-If the proof source is a directory, LeanMarathon copies it to `source/proof/` in
-the target repo. If it is a file, LeanMarathon copies it to
-`source/proof/<filename>`.
+LeanMarathon copies the problem/proof source into local ignored runtime state,
+not into the target GitHub repo. The committed target repo stays focused on the
+Lean file, Lake metadata, and CI workflows.
 
 ## Run End To End
 
@@ -268,10 +267,11 @@ Important files:
 Target-level settings are written to:
 
 ```text
-.orchestrator-repos/<owner>/<repo>/.leanmarathon/config.toml
+.leanmarathon-targets/<owner>/<repo>/config.toml
 ```
 
-The same file is also committed to the target GitHub repo. Common fields:
+This file is local runtime state and is not committed to the target GitHub repo.
+Common fields:
 
 ```toml
 [hpc.orchestrator]

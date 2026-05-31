@@ -451,6 +451,11 @@ def create_worktree(branch: str, config_dir: Path, owner: str, repo: str, base_c
 
 
 def ensure_worktree_file(worktree: Path, rel_path: str, base_commit: str, *, label: str) -> None:
+    absolute = Path(rel_path)
+    if absolute.is_absolute():
+        if absolute.exists():
+            return
+        raise FileNotFoundError(f"{label} {rel_path!r} does not exist")
     dest = worktree / rel_path
     if dest.exists():
         return
@@ -1627,6 +1632,10 @@ def source_relative_input_path(value: str) -> Path:
 
 
 def copy_runtime_input_to_target(value: str, target_root: Path) -> str:
+    if Path(value).is_absolute():
+        if not Path(value).exists():
+            raise FileNotFoundError(value)
+        return value
     rel_path = source_relative_input_path(value)
     source = SOURCE_ROOT / rel_path
     if source.exists():
