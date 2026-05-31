@@ -10,17 +10,19 @@ LeanMarathon v0.1 expects these tool versions:
 | `github-mcp-server` | `0.32.0` |
 | `git-mcp-server` | `2.10.5` |
 
-Lean itself is not pinned by LeanMarathon. The user installs Lean/Lake/Elan,
-provides tool paths through environment variables, and passes
-`--lean-project-root /path/to/lean-project` during `leanmarathon init`.
+Lean itself is not pinned by LeanMarathon. The user installs Lean/Lake/Elan and
+records tool paths plus the default Lean project root in `.leanmarathon.local.toml`.
+Passing `--lean-project-root /path/to/lean-project` during `leanmarathon init`
+overrides the local default for one target.
 That project root must contain `lakefile.toml`, `lake-manifest.json`, and
 `lean-toolchain`; its `.lake` cache is used by local Lean MCP/DAG tooling.
 
-| Variable | Meaning |
+| Local config field | Meaning |
 |---|---|
-| `LEANMARATHON_VENV_BIN` | Python virtual environment `bin` directory containing Python MCP tools. |
-| `LEANMARATHON_NODE_BIN` | Node.js `bin` directory containing Codex and Node MCP tools. |
-| `LEANMARATHON_ELAN_BIN` | Lean/Elan `bin` directory containing `lake` and `lean`. |
+| `paths.venv_bin` | Python virtual environment `bin` directory containing Python MCP tools. |
+| `paths.node_bin` | Node.js `bin` directory containing Codex and Node MCP tools. |
+| `paths.elan_bin` | Lean/Elan `bin` directory containing `lake` and `lean`. |
+| `lean.project_root` | Default Lean project root containing `lakefile.toml`. |
 
 PDF-reading packages are required:
 

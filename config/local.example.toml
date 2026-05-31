@@ -1,0 +1,17 @@
+[paths]
+venv_bin = "/absolute/path/to/LeanMarathon/.venv/bin"
+node_bin = "/absolute/path/to/node/bin"
+elan_bin = "/absolute/path/to/elan/bin"
+# Optional overrides when the composed PATH is not enough.
+# agent_path = "/absolute/path/to/venv/bin:/absolute/path/to/node/bin:/absolute/path/to/elan/bin:/usr/local/bin:/usr/bin:/bin"
+# orchestrator_path = "/absolute/path/to/venv/bin:/absolute/path/to/node/bin:/absolute/path/to/elan/bin:/usr/local/bin:/usr/bin:/bin"
+
+[lean]
+project_root = "/absolute/path/to/lean-project"
+
+[slurm]
+cpu_account = ""
+gpu_account = ""
+gpu_partition = "gpu"
+gpu_gres = "gpu:lovelace_l40:1"
+mem_per_cpu = 3850

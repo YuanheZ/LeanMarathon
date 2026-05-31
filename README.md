@@ -59,10 +59,10 @@ LeanMarathon v0.1 expects these tool versions:
 | `git-mcp-server` | `2.10.5` |
 
 Lean itself is user-provided. LeanMarathon does not pin the Lean installation.
-At `leanmarathon init` time, pass `--lean-project-root` pointing to the Lean
-project whose `lakefile.toml`, `lake-manifest.json`, `lean-toolchain`, and
-`.lake` cache should be used. LeanMarathon copies the Lake metadata into the
-target repo for CI and points Lean MCP/DAG tooling at that same project root.
+Set `lean.project_root` in `.leanmarathon.local.toml` to the Lean project whose
+`lakefile.toml`, `lake-manifest.json`, `lean-toolchain`, and `.lake` cache
+should be used. LeanMarathon copies the Lake metadata into the target repo for
+CI and points Lean MCP/DAG tooling at that same project root.
 
 Required Python PDF packages:
 
@@ -109,31 +109,42 @@ also checks configured optional numeric imports when run against a target repo.
 
 ## Environment
 
-Set paths for the tools installed on your machine or cluster:
+Create a local machine config once:
 
 ```bash
-export LEANMARATHON_VENV_BIN="/absolute/path/to/LeanMarathon/.venv/bin"
-export LEANMARATHON_NODE_BIN="/absolute/path/to/node/bin"
-export LEANMARATHON_ELAN_BIN="/absolute/path/to/elan/bin"
+cp config/local.example.toml .leanmarathon.local.toml
 ```
 
-For Slurm clusters, set resource-account variables when your site requires
-them:
+Then edit `.leanmarathon.local.toml` with your installed tool paths, default
+Lean project root, and Slurm account/partition settings. Environment variables
+with the same names still override the local config when needed.
 
-```bash
-export LEANMARATHON_SLURM_CPU_ACCOUNT="<cpu-account>"
-export LEANMARATHON_SLURM_GPU_ACCOUNT="<gpu-account>"
-export LEANMARATHON_SLURM_GPU_PARTITION="gpu"
-export LEANMARATHON_SLURM_GPU_GRES="gpu:<gpu-type>:1"
-export LEANMARATHON_SLURM_MEM_PER_CPU="3850"
+```toml
+[paths]
+venv_bin = "/absolute/path/to/LeanMarathon/.venv/bin"
+node_bin = "/absolute/path/to/node/bin"
+elan_bin = "/absolute/path/to/elan/bin"
+
+[lean]
+project_root = "/absolute/path/to/lean-project"
+
+[slurm]
+cpu_account = ""
+gpu_account = ""
+gpu_partition = "gpu"
+gpu_gres = "gpu:<gpu-type>:1"
+mem_per_cpu = 3850
 ```
 
-If your cluster does not require `#SBATCH --account`, leave the account
-variables unset.
+If your cluster does not require `#SBATCH --account`, leave the account fields
+empty.
 
 Authenticate GitHub with `gh auth login` or a token in the environment. The
 token must be able to create repositories, push branches, open PRs, write
-issues, and run workflows. Do not commit token values to any repository.
+issues, and run workflows. Generated Slurm jobs use `GITHUB_TOKEN` /
+`GITHUB_PERSONAL_ACCESS_TOKEN` when present, otherwise they derive a token from
+`gh auth token`. Do not put GitHub tokens in `.leanmarathon.local.toml` or any
+committed file.
 
 ## Initialize A Target Repo
 
@@ -148,7 +159,6 @@ Initialize a private target repository:
 leanmarathon init \
   --owner MyGitHubName \
   --repo MyTargetRepo \
-  --lean-project-root /absolute/path/to/lean-project \
   --problem-file /absolute/path/to/problem.txt \
   --proof-file /absolute/path/to/proof-source \
   --orchestrator-resource gpu \
@@ -274,6 +284,11 @@ This file is local runtime state and is not committed to the target GitHub repo.
 Common fields:
 
 ```toml
+[hpc.auto]
+resource = "cpu"
+cpus = 1
+time = "48:00:00"
+
 [hpc.orchestrator]
 resource = "gpu"
 cpus = 42
@@ -330,9 +345,9 @@ Common problems:
 |---|---|
 | `Resource not accessible by personal access token` | The active GitHub token cannot create repos or write PRs/issues. Use `gh auth status` and check scopes. |
 | No CI run appears | GitHub token/workflow permissions are insufficient, or the PR did not touch `LeanMarathon/**/*.lean`. |
-| `git-mcp-server` missing | Install `@cyanheads/git-mcp-server@2.10.5` and put its binary on `LEANMARATHON_NODE_BIN` or `PATH`. |
+| `git-mcp-server` missing | Install `@cyanheads/git-mcp-server@2.10.5` and put its binary on `paths.node_bin` or `PATH`. |
 | Lean tools time out on first use | Build/cache the Lean project in the user-provided Lean environment before launching large runs. |
-| Slurm rejects account | Set or unset `LEANMARATHON_SLURM_CPU_ACCOUNT` / `LEANMARATHON_SLURM_GPU_ACCOUNT` according to your cluster policy. |
+| Slurm rejects account | Set or unset `slurm.cpu_account` / `slurm.gpu_account` in `.leanmarathon.local.toml` according to your cluster policy. |
 
 More focused references:
 

@@ -13,17 +13,56 @@ from typing import Any
 
 
 SYSTEM_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_LEAN_PROJECT_ROOT = (
-    Path(os.environ["LEANMARATHON_LEAN_PROJECT_ROOT"]).expanduser().resolve()
-    if os.environ.get("LEANMARATHON_LEAN_PROJECT_ROOT")
-    else None
-)
+LOCAL_CONFIG_PATH = Path(
+    os.environ.get("LEANMARATHON_CONFIG", str(SYSTEM_ROOT / ".leanmarathon.local.toml"))
+).expanduser()
+
+
+def load_local_config() -> dict[str, Any]:
+    if not LOCAL_CONFIG_PATH.exists():
+        return {}
+    with LOCAL_CONFIG_PATH.open("rb") as handle:
+        return tomllib.load(handle)
+
+
+LOCAL_CONFIG = load_local_config()
+
+
+def local_cfg(path: tuple[str, ...], default: Any = "") -> Any:
+    current: Any = LOCAL_CONFIG
+    for key in path:
+        if not isinstance(current, dict) or key not in current:
+            return default
+        current = current[key]
+    return current
+
+
+def env_or_cfg(env_name: str, path: tuple[str, ...], default: str = "") -> str:
+    value = os.environ.get(env_name)
+    if value is not None:
+        return value
+    configured = local_cfg(path, default)
+    return "" if configured is None else str(configured)
+
+
+LOCAL_VENV_BIN = env_or_cfg("LEANMARATHON_VENV_BIN", ("paths", "venv_bin"), str(SYSTEM_ROOT / ".venv" / "bin"))
+LOCAL_NODE_BIN = env_or_cfg("LEANMARATHON_NODE_BIN", ("paths", "node_bin"))
+LOCAL_ELAN_BIN = env_or_cfg("LEANMARATHON_ELAN_BIN", ("paths", "elan_bin"))
+LOCAL_AGENT_PATH = env_or_cfg("LEANMARATHON_AGENT_PATH", ("paths", "agent_path"))
+LOCAL_ORCH_PATH = env_or_cfg("LEANMARATHON_ORCH_PATH", ("paths", "orchestrator_path"))
+LOCAL_SLURM_CPU_ACCOUNT = env_or_cfg("LEANMARATHON_SLURM_CPU_ACCOUNT", ("slurm", "cpu_account"))
+LOCAL_SLURM_GPU_ACCOUNT = env_or_cfg("LEANMARATHON_SLURM_GPU_ACCOUNT", ("slurm", "gpu_account"))
+LOCAL_SLURM_GPU_PARTITION = env_or_cfg("LEANMARATHON_SLURM_GPU_PARTITION", ("slurm", "gpu_partition"), "gpu")
+LOCAL_SLURM_GPU_GRES = env_or_cfg("LEANMARATHON_SLURM_GPU_GRES", ("slurm", "gpu_gres"), "gpu:lovelace_l40:1")
+LOCAL_SLURM_MEM_PER_CPU = env_or_cfg("LEANMARATHON_SLURM_MEM_PER_CPU", ("slurm", "mem_per_cpu"), "3850")
+LOCAL_LEAN_PROJECT_ROOT = env_or_cfg("LEANMARATHON_LEAN_PROJECT_ROOT", ("lean", "project_root"))
+DEFAULT_LEAN_PROJECT_ROOT = Path(LOCAL_LEAN_PROJECT_ROOT).expanduser().resolve() if LOCAL_LEAN_PROJECT_ROOT else None
 DEFAULT_PATH = os.pathsep.join(
     item
     for item in [
-        os.environ.get("LEANMARATHON_VENV_BIN", str(SYSTEM_ROOT / ".venv" / "bin")),
-        os.environ.get("LEANMARATHON_NODE_BIN", ""),
-        os.environ.get("LEANMARATHON_ELAN_BIN", ""),
+        LOCAL_VENV_BIN,
+        LOCAL_NODE_BIN,
+        LOCAL_ELAN_BIN,
         "/usr/local/bin",
         "/usr/bin",
         "/bin",
@@ -226,6 +265,9 @@ def write_project_config(
     lean_file: str,
     problem_file: str,
     proof_file: str,
+    auto_resource: str,
+    auto_cpus: int,
+    auto_time: str,
     orchestrator_resource: str,
     orchestrator_cpus: int,
     orchestrator_time: str,
@@ -252,6 +294,11 @@ def write_project_config(
                 f"problem_file = {toml_quote(problem_file)}",
                 f"proof_file = {toml_quote(proof_file)}",
                 f"lean_project_root = {toml_quote(str(lean_project_root))}",
+                "",
+                "[hpc.auto]",
+                f"resource = {toml_quote(auto_resource)}",
+                f"cpus = {auto_cpus}",
+                f"time = {toml_quote(auto_time)}",
                 "",
                 "[hpc.orchestrator]",
                 f"resource = {toml_quote(orchestrator_resource)}",
@@ -363,7 +410,7 @@ def command_init(args: argparse.Namespace) -> int:
     owner = args.owner
     repo = args.repo
     if not args.lean_project_root:
-        raise SystemExit("--lean-project-root is required unless LEANMARATHON_LEAN_PROJECT_ROOT is set")
+        raise SystemExit("--lean-project-root is required unless lean.project_root is set in .leanmarathon.local.toml")
     lean_project_root = Path(args.lean_project_root).expanduser().resolve()
     if not lean_project_root.is_dir():
         raise SystemExit(f"Lean project root does not exist: {lean_project_root}")
@@ -401,6 +448,9 @@ def command_init(args: argparse.Namespace) -> int:
         lean_file=args.lean_file,
         problem_file=str(runtime_problem),
         proof_file=str(runtime_proof),
+        auto_resource=args.auto_resource,
+        auto_cpus=args.auto_cpus,
+        auto_time=args.auto_time,
         orchestrator_resource=args.orchestrator_resource,
         orchestrator_cpus=args.orchestrator_cpus,
         orchestrator_time=args.orchestrator_time,
@@ -425,9 +475,17 @@ def orchestrator_env(config: dict[str, Any]) -> dict[str, str]:
             raise SystemExit("missing project.lean_project_root in LeanMarathon target config")
         lean_project_root = str(DEFAULT_LEAN_PROJECT_ROOT)
     numeric_tools = cfg_get(config, ("capabilities", "numeric_tools"), [])
-    return {
+    env = {
         "ORCHESTRATOR_SOURCE_ROOT": str(SYSTEM_ROOT),
         "ORCHESTRATOR_LEAN_PROJECT_ROOT": lean_project_root,
+        "LEANMARATHON_VENV_BIN": LOCAL_VENV_BIN,
+        "LEANMARATHON_NODE_BIN": LOCAL_NODE_BIN,
+        "LEANMARATHON_ELAN_BIN": LOCAL_ELAN_BIN,
+        "LEANMARATHON_SLURM_CPU_ACCOUNT": LOCAL_SLURM_CPU_ACCOUNT,
+        "LEANMARATHON_SLURM_GPU_ACCOUNT": LOCAL_SLURM_GPU_ACCOUNT,
+        "LEANMARATHON_SLURM_GPU_PARTITION": LOCAL_SLURM_GPU_PARTITION,
+        "LEANMARATHON_SLURM_GPU_GRES": LOCAL_SLURM_GPU_GRES,
+        "LEANMARATHON_SLURM_MEM_PER_CPU": LOCAL_SLURM_MEM_PER_CPU,
         "ORCH_RESOURCE_MODE": str(cfg_get(config, ("hpc", "orchestrator", "resource"), "cpu")),
         "ORCH_CPUS": str(cfg_get(config, ("hpc", "orchestrator", "cpus"), 8)),
         "ORCH_TIME": str(cfg_get(config, ("hpc", "orchestrator", "time"), "48:00:00")),
@@ -436,13 +494,18 @@ def orchestrator_env(config: dict[str, Any]) -> dict[str, str]:
         "AGENT_TIME": str(cfg_get(config, ("hpc", "agent", "time"), "4:00:00")),
         "LEANMARATHON_NUMERIC_TOOLS": ",".join(str(item) for item in numeric_tools),
     }
+    if LOCAL_AGENT_PATH:
+        env["LEANMARATHON_AGENT_PATH"] = LOCAL_AGENT_PATH
+    if LOCAL_ORCH_PATH:
+        env["LEANMARATHON_ORCH_PATH"] = LOCAL_ORCH_PATH
+    return env
 
 
 def slurm_account(resource: str) -> str:
     if resource == "cpu":
-        return os.environ.get("LEANMARATHON_SLURM_CPU_ACCOUNT", "")
+        return LOCAL_SLURM_CPU_ACCOUNT
     if resource == "gpu":
-        return os.environ.get("LEANMARATHON_SLURM_GPU_ACCOUNT", "")
+        return LOCAL_SLURM_GPU_ACCOUNT
     raise SystemExit(f"unknown Slurm resource mode: {resource}")
 
 
@@ -450,8 +513,8 @@ def slurm_resource_directives(resource: str) -> list[str]:
     if resource == "cpu":
         return []
     if resource == "gpu":
-        partition = os.environ.get("LEANMARATHON_SLURM_GPU_PARTITION", "gpu")
-        gres = os.environ.get("LEANMARATHON_SLURM_GPU_GRES", "gpu:lovelace_l40:1")
+        partition = LOCAL_SLURM_GPU_PARTITION
+        gres = LOCAL_SLURM_GPU_GRES
         return [f"#SBATCH --partition={partition}", f"#SBATCH --gres={gres}"]
     raise SystemExit(f"unknown Slurm resource mode: {resource}")
 
@@ -486,7 +549,7 @@ def auto_forward_args(args: argparse.Namespace, *, submit: bool) -> list[str]:
         forwarded.extend(["--max-rounds", str(args.max_rounds)])
     if args.start_review_round != 1:
         forwarded.extend(["--start-review-round", str(args.start_review_round)])
-    if args.start_round != 1:
+    if args.start_round is not None:
         forwarded.extend(["--start-round", str(args.start_round)])
     if args.n is not None:
         forwarded.extend(["--n", str(args.n)])
@@ -499,13 +562,13 @@ def auto_forward_args(args: argparse.Namespace, *, submit: bool) -> list[str]:
 
 def submit_auto_job(args: argparse.Namespace, config: dict[str, Any]) -> int:
     env = orchestrator_env(config)
-    resource = str(env["ORCH_RESOURCE_MODE"])
+    resource = str(cfg_get(config, ("hpc", "auto", "resource"), "cpu"))
     account = slurm_account(resource)
     account_line = f"#SBATCH --account={account}" if account else ""
     resource_lines = "\n".join(slurm_resource_directives(resource))
-    cpus = str(env["ORCH_CPUS"])
-    time_limit = str(env["ORCH_TIME"])
-    mem_per_cpu = os.environ.get("LEANMARATHON_SLURM_MEM_PER_CPU", "3850")
+    cpus = str(cfg_get(config, ("hpc", "auto", "cpus"), 1))
+    time_limit = str(cfg_get(config, ("hpc", "auto", "time"), "48:00:00"))
+    mem_per_cpu = LOCAL_SLURM_MEM_PER_CPU
 
     root = target_root(args.owner, args.repo)
     timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -591,11 +654,11 @@ def command_auto(args: argparse.Namespace) -> int:
         str(args.n or cfg_get(config, ("hpc", "agent", "batch_size"), 16)),
         "--max-rounds",
         str(args.max_rounds or cfg_get(config, ("stage2", "max_rounds"), 100)),
-        "--start-round",
-        str(args.start_round),
         "--agent-resource",
         str(args.agent_resource or cfg_get(config, ("hpc", "agent", "resource"), "cpu")),
     ]
+    if args.start_round is not None:
+        stage2_extra.extend(["--start-round", str(args.start_round)])
     return submit_stage_and_wait(
         owner=args.owner,
         repo=args.repo,
@@ -761,11 +824,11 @@ def command_stage2_run(args: argparse.Namespace) -> int:
         str(args.n or cfg_get(config, ("hpc", "agent", "batch_size"), 16)),
         "--max-rounds",
         str(args.max_rounds or cfg_get(config, ("stage2", "max_rounds"), 100)),
-        "--start-round",
-        str(args.start_round),
         "--agent-resource",
         str(args.agent_resource or cfg_get(config, ("hpc", "agent", "resource"), "cpu")),
     ]
+    if args.start_round is not None:
+        extra.extend(["--start-round", str(args.start_round)])
     return run_script_from_config(
         owner=args.owner,
         repo=args.repo,
@@ -872,6 +935,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="absolute path to the user's Lean project root containing lakefile.toml",
     )
     init.add_argument("--public", action="store_true")
+    init.add_argument("--auto-resource", choices=("cpu", "gpu"), default="cpu")
+    init.add_argument("--auto-cpus", type=int, default=1)
+    init.add_argument("--auto-time", default="48:00:00")
     init.add_argument("--orchestrator-resource", choices=("cpu", "gpu"), default="gpu")
     init.add_argument("--orchestrator-cpus", type=int, default=42)
     init.add_argument("--orchestrator-time", default="48:00:00")
@@ -904,7 +970,7 @@ def build_parser() -> argparse.ArgumentParser:
     stage2_run.add_argument("--repo", required=True)
     stage2_run.add_argument("--n", type=int)
     stage2_run.add_argument("--max-rounds", type=int)
-    stage2_run.add_argument("--start-round", type=int, default=1)
+    stage2_run.add_argument("--start-round", type=int)
     stage2_run.add_argument("--agent-resource", choices=("cpu", "gpu"))
     stage2_run.add_argument("--submit", action="store_true", default=True)
     stage2_run.add_argument("--no-submit", dest="submit", action="store_false")
@@ -916,7 +982,7 @@ def build_parser() -> argparse.ArgumentParser:
     auto.add_argument("--max-review-rounds", type=int)
     auto.add_argument("--max-rounds", type=int)
     auto.add_argument("--start-review-round", type=int, default=1)
-    auto.add_argument("--start-round", type=int, default=1)
+    auto.add_argument("--start-round", type=int)
     auto.add_argument("--n", type=int)
     auto.add_argument("--skip-blueprinter", action="store_true")
     auto.add_argument("--agent-resource", choices=("cpu", "gpu"))

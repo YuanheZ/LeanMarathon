@@ -1312,6 +1312,72 @@ def classify_proofs_safely(commit: str, lean_file: str, owner: str, repo: str) -
         return {}
 
 
+def stage2_audit_entries() -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    runs_root = REPO_ROOT / ".orchestrator-runs"
+    if not runs_root.exists():
+        return entries
+    for path in sorted(runs_root.glob("**/audit.jsonl")):
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("phase") == "B" and isinstance(entry.get("round"), int):
+                    entry["_audit_path"] = str(path)
+                    entries.append(entry)
+    return entries
+
+
+def parse_start_round(value: Any) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"", "auto"}:
+        return None
+    try:
+        return int(text)
+    except ValueError as exc:
+        raise ValueError("--start-round must be a positive integer when provided") from exc
+
+
+def infer_start_round(args: argparse.Namespace) -> int:
+    explicit = parse_start_round(args.start_round)
+    if explicit is not None:
+        return explicit
+
+    entries = stage2_audit_entries()
+    if not entries:
+        log("start round auto: no previous Stage 2 audit found; using round 1")
+        return 1
+
+    latest_round = max(int(entry["round"]) for entry in entries)
+    latest_entries = [entry for entry in entries if int(entry["round"]) == latest_round]
+    latest_kinds = {str(entry.get("kind") or "") for entry in latest_entries}
+    try:
+        open_issues = list_open_issues(args.owner, args.repo)
+    except Exception as exc:
+        log(f"start round auto: could not fetch open issues ({exc}); using round {latest_round + 1}")
+        return latest_round + 1
+
+    issue_waiting_round = (
+        bool(open_issues)
+        and "refiner" not in latest_kinds
+        and any(kind in latest_kinds for kind in {"workers", "compile_check_failed"})
+    )
+    if issue_waiting_round:
+        log(
+            f"start round auto: latest round {latest_round} has open issues and no refiner record; "
+            f"resuming round {latest_round}"
+        )
+        return latest_round
+
+    next_round = latest_round + 1
+    log(f"start round auto: latest recorded Stage 2 round is {latest_round}; using round {next_round}")
+    return next_round
+
+
 def run_refiner_for_open_issues(
     *,
     round_id: int,
@@ -1370,10 +1436,11 @@ def per_node_loop(args: argparse.Namespace) -> LoopState:
     worktrees_root = Path(args.worktrees_root)
     validate_positive("--n", args.n)
     validate_positive("--max-rounds", args.max_rounds)
-    validate_positive("--start-round", args.start_round)
-    if args.start_round > args.max_rounds:
+    start_round = infer_start_round(args)
+    validate_positive("--start-round", start_round)
+    if start_round > args.max_rounds:
         raise ValueError(
-            f"--start-round ({args.start_round}) must be <= --max-rounds ({args.max_rounds})"
+            f"--start-round ({start_round}) must be <= --max-rounds ({args.max_rounds})"
         )
     validate_paths(args.branch_main, worktrees_root)
 
@@ -1385,7 +1452,7 @@ def per_node_loop(args: argparse.Namespace) -> LoopState:
     commit = base
     log(f"starting Phase B from origin/{args.branch_main} at {commit}")
 
-    for round_id in range(args.start_round, args.max_rounds + 1):
+    for round_id in range(start_round, args.max_rounds + 1):
         round_base = current_main_head(args.branch_main, args.owner, args.repo)
         if round_base != commit:
             log(
@@ -1833,9 +1900,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-rounds", type=int, required=True)
     parser.add_argument(
         "--start-round",
-        type=int,
-        default=1,
-        help="first round id to use for resumed runs; --max-rounds remains the final round id",
+        default="auto",
+        help="first round id for resumed runs; omit for audit-based auto resume",
     )
     parser.add_argument("--audit-dir")
     parser.add_argument("--poll-seconds", type=int, default=POLL_SECONDS)

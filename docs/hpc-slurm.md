@@ -6,6 +6,11 @@ LeanMarathon stores resource shape settings in the local runtime config:
 `.leanmarathon-targets/<owner>/<repo>/config.toml`.
 
 ```toml
+[hpc.auto]
+resource = "cpu"
+cpus = 1
+time = "48:00:00"
+
 [hpc.orchestrator]
 resource = "gpu"
 cpus = 42
@@ -18,16 +23,28 @@ time = "4:00:00"
 batch_size = 16
 ```
 
-Cluster-specific paths and accounts are supplied by environment variables:
+Cluster-specific paths and accounts are normally supplied by
+`.leanmarathon.local.toml`:
 
-- `LEANMARATHON_VENV_BIN`: Python virtual environment `bin` directory.
-- `LEANMARATHON_NODE_BIN`: Node.js `bin` directory containing Codex and Node MCP tools.
-- `LEANMARATHON_ELAN_BIN`: Lean/Elan `bin` directory.
-- `LEANMARATHON_SLURM_CPU_ACCOUNT`: optional CPU Slurm account.
-- `LEANMARATHON_SLURM_GPU_ACCOUNT`: optional GPU Slurm account.
-- `LEANMARATHON_SLURM_GPU_PARTITION`: GPU partition, default `gpu`.
-- `LEANMARATHON_SLURM_GPU_GRES`: GPU GRES request, default `gpu:lovelace_l40:1`.
-- `LEANMARATHON_SLURM_MEM_PER_CPU`: memory per CPU in MB, default `3850`.
+```toml
+[paths]
+venv_bin = "/absolute/path/to/LeanMarathon/.venv/bin"
+node_bin = "/absolute/path/to/node/bin"
+elan_bin = "/absolute/path/to/elan/bin"
 
-If your cluster does not require `#SBATCH --account`, leave the account
-variables unset.
+[lean]
+project_root = "/absolute/path/to/lean-project"
+
+[slurm]
+cpu_account = ""
+gpu_account = ""
+gpu_partition = "gpu"
+gpu_gres = "gpu:lovelace_l40:1"
+mem_per_cpu = 3850
+```
+
+Environment variables with matching `LEANMARATHON_*` names override the local
+config.
+
+If your cluster does not require `#SBATCH --account`, leave the account fields
+empty.

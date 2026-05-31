@@ -2,11 +2,13 @@
 
 ## 1. Initialize A Target Repo
 
+Create `.leanmarathon.local.toml` from `config/local.example.toml` and
+fill in your tool paths, Lean project root, and Slurm settings.
+
 ```bash
 leanmarathon init \
   --owner MyGitHubName \
   --repo MyTargetRepo \
-  --lean-project-root /absolute/path/to/lean-project \
   --problem-file /absolute/path/to/problem.txt \
   --proof-file /absolute/path/to/proof-source
 ```

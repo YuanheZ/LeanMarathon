@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .venv
 .venv/
+.leanmarathon.local.toml
 .lake
 .lake/
 .orchestrator-repos/
