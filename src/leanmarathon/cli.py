@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import importlib.util
 import json
 import os
 import shutil
@@ -257,6 +258,17 @@ def normalize_repeated(values: list[str] | None) -> list[str]:
     return out
 
 
+def detect_importable_numeric_tools() -> list[str]:
+    detected: list[str] = []
+    for module in NUMERIC_TOOL_IMPORTS:
+        try:
+            if importlib.util.find_spec(module) is not None:
+                detected.append(module)
+        except (ImportError, ModuleNotFoundError, ValueError):
+            continue
+    return detected
+
+
 def write_project_config(
     root: Path,
     *,
@@ -430,7 +442,7 @@ def command_init(args: argparse.Namespace) -> int:
     state_root.mkdir(parents=True, exist_ok=True)
     target_problem = args.target_problem_file or "inputs/problem.txt"
     target_proof = args.target_proof_file or default_runtime_proof_path(proof_src)
-    numeric_tools = normalize_repeated(args.numeric_tool)
+    numeric_tools = detect_importable_numeric_tools()
 
     copy_core_project_files(root, lean_project_root)
     write_target_gitignore(root)
@@ -575,7 +587,7 @@ def submit_auto_job(args: argparse.Namespace, config: dict[str, Any]) -> int:
     audit_dir = root / ".orchestrator-runs" / f"auto-{timestamp}"
     audit_dir.mkdir(parents=True, exist_ok=True)
     script = audit_dir / "auto.sbatch"
-    command = [sys.executable, str(Path(__file__).resolve()), *auto_forward_args(args, submit=False)]
+    command = [str(Path(LOCAL_VENV_BIN) / "leanmarathon"), *auto_forward_args(args, submit=False)]
     command_text = " ".join(shell_quote_env(item) for item in command)
 
     exports = []
@@ -584,10 +596,6 @@ def submit_auto_job(args: argparse.Namespace, config: dict[str, Any]) -> int:
     for key, value in sorted(os.environ.items()):
         if key.startswith("LEANMARATHON_"):
             exports.append(f"export {key}={shell_quote_env(value)}")
-    if os.environ.get("PYTHONPATH"):
-        exports.append(f"export PYTHONPATH={shell_quote_env(os.environ['PYTHONPATH'])}")
-    else:
-        exports.append(f"export PYTHONPATH={shell_quote_env(str(SYSTEM_ROOT / 'src'))}")
 
     script.write_text(
         "\n".join(
@@ -885,7 +893,7 @@ def command_doctor(args: argparse.Namespace) -> int:
     else:
         configured_numeric = []
 
-    numeric_tools = normalize_repeated(args.numeric_tool) or configured_numeric
+    numeric_tools = configured_numeric or detect_importable_numeric_tools()
     for module in numeric_tools:
         proc = run(
             [
@@ -947,7 +955,6 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--batch-size", type=int, default=16)
     init.add_argument("--max-rounds", type=int, default=100)
     init.add_argument("--max-review-rounds", type=int, default=20)
-    init.add_argument("--numeric-tool", action="append", help="optional numeric Python import name; repeat or comma-separate")
     init.set_defaults(func=command_init)
 
     stage1 = sub.add_parser("stage1", help="Stage 1 commands")
@@ -998,7 +1005,6 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="check local dependencies")
     doctor.add_argument("--owner")
     doctor.add_argument("--repo")
-    doctor.add_argument("--numeric-tool", action="append", help="optional numeric Python import name; repeat or comma-separate")
     doctor.set_defaults(func=command_doctor)
 
     return parser
