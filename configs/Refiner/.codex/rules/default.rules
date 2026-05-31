@@ -1,0 +1,17 @@
+prefix_rule(
+    pattern = ["git"],
+    decision = "forbidden",
+    justification = "Git commands are disabled by policy.",
+)
+
+prefix_rule(
+    pattern = ["gh"],
+    decision = "forbidden",
+    justification = "GitHub CLI commands are disabled by policy.",
+)
+
+prefix_rule(
+    pattern = [["curl", "wget", "ssh", "scp", "rsync", "nc", "ncat", "ftp", "telnet"]],
+    decision = "forbidden",
+    justification = "Network fetch commands are disabled by policy.",
+)

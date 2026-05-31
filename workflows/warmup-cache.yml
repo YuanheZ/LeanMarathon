@@ -1,0 +1,71 @@
+name: warmup-cache
+
+# Pre-populate the .lake / ~/.elan build cache on every push to `main`, and
+# allow a manual trigger for cold-start bootstrap. GitHub Actions caches
+# scoped to `refs/heads/main` are visible to every PR targeting main, so this
+# runs once on each main push and amortizes the bootstrap over all subsequent
+# verify-blueprint runs.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'lakefile.toml'
+      - 'lake-manifest.json'
+      - 'lean-toolchain'
+      - '.github/workflows/warmup-cache.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: warmup-cache
+  cancel-in-progress: false
+
+jobs:
+  warmup-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Read lean-toolchain
+        id: toolchain
+        run: echo "version=$(cat lean-toolchain)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache .lake
+        uses: actions/cache@v4
+        with:
+          path: |
+            .lake
+            ~/.elan
+          key: lake-${{ runner.os }}-${{ steps.toolchain.outputs.version }}-${{ hashFiles('lake-manifest.json', 'lakefile.toml') }}
+          restore-keys: |
+            lake-${{ runner.os }}-${{ steps.toolchain.outputs.version }}-
+
+      - name: Install elan + Lean toolchain
+        run: |
+          set -euo pipefail
+          if ! command -v elan >/dev/null; then
+            curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+              | sh -s -- -y --default-toolchain none
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Update packages
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.elan/bin:$PATH"
+          if [ ! -d .lake/packages/mathlib ]; then
+            lake update
+          fi
+
+      - name: Fetch Mathlib oleans
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.elan/bin:$PATH"
+          lake exe cache get || true
+
+      - name: Build Architect
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.elan/bin:$PATH"
+          lake build Architect

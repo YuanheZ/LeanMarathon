@@ -1,0 +1,8 @@
+problem_file: "<path to the canonical source statements, relative to worktree>"
+proof_file: "<path to the raw source proof, relative to worktree>"
+issues_file: "issue/"
+lean_file: "LeanMarathon/Main.lean"
+owner: "<GitHub owner>"
+repo: "<GitHub repository>"
+branch: "<feature branch>"
+worktrees_root: "<absolute path to worktree root>"

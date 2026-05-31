@@ -1,0 +1,32 @@
+name = "LeanMarathon"
+version = "0.1.0"
+keywords = ["math"]
+defaultTargets = ["LeanMarathon"]
+
+[leanOptions]
+relaxedAutoImplicit = false
+weak.linter.mathlibStandardSet = true
+maxSynthPendingDepth = 3
+
+[[require]]
+name = "LeanArchitect"
+git = "https://github.com/hanwenzhu/LeanArchitect.git"
+rev = "v4.30.0-rc2"
+
+[[require]]
+name = "repl"
+git = "https://github.com/leanprover-community/repl"
+rev = "v4.30.0-rc2"
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.30.0-rc2"
+
+[[lean_lib]]
+name = "LeanMarathon"
+
+[[lean_exe]]
+name = "checkdecls"
+root = "BlueprintCheckdecls"
+supportInterpreter = true

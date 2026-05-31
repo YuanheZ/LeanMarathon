@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv
+.venv/
+.lake
+.lake/
+.orchestrator-repos/
+.orchestrator-runs/
+.worktrees/
+.codex-session-home/
+.pytest_cache/
+dist/
+build/
+*.egg-info/

@@ -1,0 +1,318 @@
+name: verify-blueprint
+
+# SECURITY MODEL
+# --------------
+# Trigger: `pull_request_target`. GitHub runs this workflow's YAML and the
+# scripts it references from the BASE branch (main), NOT from the PR head.
+# Any tampering of `.github/` or `.scripts/` in a PR is never executed.
+#
+# The base branch is checked out at the workspace root (`.`) so that its
+# cache key and path match those of `warmup-cache.yml`. The PR's
+# contribution is applied via a path-restricted `git checkout HEAD_SHA --
+# LeanMarathon/`, which overlays ONLY files under `LeanMarathon/` — base's
+# `.github/`, `.scripts/`, `lakefile.toml`, `lake-manifest.json`, and
+# `lean-toolchain` remain untouched. The `Enforce path allowlist` step
+# additionally rejects any PR that writes outside `LeanMarathon/**/*.lean`.
+
+on:
+  pull_request_target:
+    branches: [main]
+
+permissions:
+  # `contents: write` is required by `gh pr merge --auto --squash` (calls the
+  # mergePullRequest GraphQL mutation). It is safe because GITHUB_TOKEN is
+  # only exposed to the steps that explicitly reference `secrets.GITHUB_TOKEN`
+  # (Upsert PR comment, Merge on success, Explicitly close linked issues); the
+  # `Compile changed blueprint files only` step runs `lake env lean` with no
+  # token in its environment, so a hostile `#eval` cannot exfiltrate it.
+  contents: write
+  pull-requests: write
+  # PRs merged by GITHUB_TOKEN do not reliably trigger GitHub's implicit
+  # closing-keyword behavior, so linked issues are closed explicitly after a
+  # successful merge.
+  issues: write
+
+concurrency:
+  group: verify-blueprint-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify-blueprint:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Trusted base checkout at the workspace root. Full history so we
+      #    can diff against the PR head's SHA.
+      - name: Checkout base (main) — trusted CI
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      # 2. Fetch the PR head object so its files are reachable for a
+      #    path-restricted checkout and for diffs.
+      - name: Fetch PR head
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch origin "$HEAD_SHA"
+
+      # 3. Reject any PR that modifies a path outside LeanMarathon/**/*.lean.
+      - name: Enforce path allowlist
+        id: allowlist
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only --diff-filter=ACMRD "$BASE_SHA...$HEAD_SHA" || true)
+          echo "=== Changed paths ==="
+          printf '%s\n' "$changed"
+          bad=$(printf '%s\n' "$changed" | grep -vE '^LeanMarathon/.+\.lean$' | grep -v '^$' || true)
+          if [[ -n "$bad" ]]; then
+            echo "::error::Path allowlist violation — only LeanMarathon/**/*.lean may be modified."
+            while IFS= read -r line; do
+              echo "::error::  forbidden path: $line"
+            done <<< "$bad"
+            exit 2
+          fi
+
+      # 4. Detect changed blueprint files; grep the PR's tree for @[blueprint.
+      - name: Detect blueprint files in PR
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA...$HEAD_SHA" -- 'LeanMarathon/*.lean' 'LeanMarathon/**/*.lean' || true)
+          blueprint_files=()
+          while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            # Inspect the PR's version of the file (fetched above).
+            content=$(git show "$HEAD_SHA:$f" 2>/dev/null || true)
+            if grep -q '@\[blueprint' <<< "$content"; then
+              blueprint_files+=("$f")
+            fi
+          done <<< "$changed"
+          if [[ ${#blueprint_files[@]} -eq 0 ]]; then
+            echo "is_blueprint=false" >> "$GITHUB_OUTPUT"
+            echo "No blueprint files changed in this PR — verification skipped."
+          else
+            echo "is_blueprint=true" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "${blueprint_files[@]}" > blueprint-files.txt
+            echo "Blueprint files to verify:"
+            cat blueprint-files.txt
+          fi
+
+      # 5. Overlay PR's LeanMarathon/ — path-restricted checkout only modifies
+      #    files under LeanMarathon/. Base's CI, scripts, and lakefile stay.
+      - name: Overlay PR LeanMarathon onto base tree
+        if: steps.detect.outputs.is_blueprint == 'true'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          rm -rf LeanMarathon
+          git checkout "$HEAD_SHA" -- LeanMarathon
+          echo "=== LeanMarathon/ contents after overlay ==="
+          find LeanMarathon -type f | head -20
+
+      - name: Read lean-toolchain
+        if: steps.detect.outputs.is_blueprint == 'true'
+        id: toolchain
+        run: echo "version=$(cat lean-toolchain)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache .lake
+        if: steps.detect.outputs.is_blueprint == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            .lake
+            ~/.elan
+          key: lake-${{ runner.os }}-${{ steps.toolchain.outputs.version }}-${{ hashFiles('lake-manifest.json', 'lakefile.toml') }}
+          restore-keys: |
+            lake-${{ runner.os }}-${{ steps.toolchain.outputs.version }}-
+
+      - name: Install elan + Lean toolchain
+        if: steps.detect.outputs.is_blueprint == 'true'
+        run: |
+          set -euo pipefail
+          if ! command -v elan >/dev/null; then
+            curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+              | sh -s -- -y --default-toolchain none
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Ensure Lean dependencies
+        if: steps.detect.outputs.is_blueprint == 'true'
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.elan/bin:$PATH"
+
+          if [[ ! -d .lake/packages/mathlib || ! -d .lake/packages/LeanArchitect ]]; then
+            lake update
+          fi
+
+          if [[ ! -f .lake/packages/mathlib/.lake/build/lib/lean/Mathlib.olean ]]; then
+            lake exe cache get
+          fi
+
+          lake build Architect
+
+      - name: Compile changed blueprint files only
+        if: steps.detect.outputs.is_blueprint == 'true'
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.elan/bin:$PATH"
+          : > build.log
+          while IFS= read -r f; do
+            echo "== compiling $f ==" | tee -a build.log
+            lake env lean -- "$f" 2>&1 | tee -a build.log || true
+          done < blueprint-files.txt
+
+      - name: Run blueprint verifier
+        if: steps.detect.outputs.is_blueprint == 'true'
+        id: verify
+        run: |
+          set +e
+          mapfile -t files < blueprint-files.txt
+          python3 .scripts/verify_blueprint.py \
+            --build-log build.log \
+            --report verify-report.json \
+            "${files[@]}" | tee verify-stdout.txt
+          status=${PIPESTATUS[0]}
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Build PR comment body
+        if: steps.detect.outputs.is_blueprint == 'true'
+        id: comment
+        run: |
+          set -euo pipefail
+          marker='<!-- verify-blueprint:report -->'
+          {
+            echo "$marker"
+            if [[ "${{ steps.verify.outputs.exit_code }}" == "0" ]]; then
+              echo "**verify-blueprint passed** (run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}))"
+              echo
+              echo '```'
+              cat verify-stdout.txt
+              echo '```'
+            else
+              echo "**verify-blueprint failed** (run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}))"
+              echo
+              echo "Per-check results:"
+              echo
+              echo '```'
+              cat verify-stdout.txt
+              echo '```'
+              echo
+              echo "Fix the listed issues, push to this branch, and the workflow will re-run."
+            fi
+          } > comment.md
+          cat comment.md
+
+      - name: Upsert PR comment
+        if: steps.detect.outputs.is_blueprint == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          marker='<!-- verify-blueprint:report -->'
+          existing_id=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+            --jq "[.[] | select(.body | startswith(\"$marker\"))][0].id // empty")
+          if [[ -n "$existing_id" ]]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$existing_id" \
+              -f body="$(cat comment.md)" >/dev/null
+            echo "Updated existing report comment ($existing_id)."
+          else
+            gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" \
+              -f body="$(cat comment.md)" >/dev/null
+            echo "Posted new report comment."
+          fi
+
+      # Direct squash-merge (no `--auto`). The verifier has already passed at
+      # this point, so there is nothing to wait for. `--auto` would ask GitHub
+      # to "merge when requirements are met", which requires a pending required
+      # check (branch protection) and serialises badly across parallel PRs —
+      # only the first PR to finish its workflow can enable auto-merge; a later
+      # parallel PR finds `main` has moved and the mutation refuses. A direct
+      # merge doesn't need a pending check and lets every non-conflicting
+      # parallel PR land as its own CI completes.
+      - name: Merge on success
+        if: steps.detect.outputs.is_blueprint == 'true' && steps.verify.outputs.exit_code == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr merge --squash "$PR_NUMBER"
+
+      - name: Explicitly close linked issues
+        if: steps.detect.outputs.is_blueprint == 'true' && steps.verify.outputs.exit_code == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.body // ""' > pr-body.txt
+
+          REPO="$REPO" python3 - <<'PY' > closing-issues.txt
+          import os
+          import re
+          from pathlib import Path
+
+          repo = os.environ["REPO"].lower()
+          body = Path("pr-body.txt").read_text(encoding="utf-8")
+          keyword = r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)"
+          ref = re.compile(r"(?:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?P<num>[0-9]+)")
+          seen = set()
+
+          for match in re.finditer(rf"\b{keyword}\b(?P<tail>[^\n]*)", body, flags=re.IGNORECASE):
+              for issue_ref in ref.finditer(match.group("tail")):
+                  ref_repo = issue_ref.group("repo")
+                  if ref_repo is not None and ref_repo.lower() != repo:
+                      continue
+                  num = issue_ref.group("num")
+                  if num not in seen:
+                      seen.add(num)
+                      print(num)
+          PY
+
+          if [[ ! -s closing-issues.txt ]]; then
+            echo "No same-repository closing issue references found in PR body."
+            exit 0
+          fi
+
+          while IFS= read -r issue_number; do
+            [[ -n "$issue_number" ]] || continue
+            issue_path="repos/$REPO/issues/$issue_number"
+
+            current_state=$(gh api "$issue_path" --jq '.state')
+            if [[ "$current_state" == "closed" ]]; then
+              echo "Issue #$issue_number is already closed."
+              continue
+            fi
+
+            echo "Closing issue #$issue_number."
+            if gh api -X PATCH "$issue_path" \
+              -f state=closed \
+              -f state_reason=completed >/dev/null; then
+              continue
+            fi
+
+            retry_state=$(gh api "$issue_path" --jq '.state')
+            if [[ "$retry_state" == "closed" ]]; then
+              echo "Issue #$issue_number became closed while closing; treating as success."
+              continue
+            fi
+
+            echo "::error::Failed to close issue #$issue_number; issue state is $retry_state."
+            exit 1
+          done < closing-issues.txt
+
+      - name: Fail job on verifier failure
+        if: steps.detect.outputs.is_blueprint == 'true' && steps.verify.outputs.exit_code != '0'
+        run: |
+          echo "Verifier exited with code ${{ steps.verify.outputs.exit_code }}"
+          exit 1

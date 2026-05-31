@@ -1,0 +1,33 @@
+model = "gpt-5.5"
+model_reasoning_effort = "xhigh"
+model_context_window = 400000
+model_auto_compact_token_limit = 400000
+
+sandbox_mode = "read-only"
+approval_policy = "never"
+web_search = "disabled"
+
+[features]
+browser_use = false
+in_app_browser = false
+computer_use = false
+apps = false
+
+[mcp_servers.lean-explore]
+command = "lean-explore"
+args = ["mcp", "serve", "--backend", "local"]
+startup_timeout_sec = 120
+tool_timeout_sec = 600
+default_tools_approval_mode = "approve"
+
+[mcp_servers.github]
+command = "github-mcp-server"
+args = ["stdio"]
+env_vars = ["GITHUB_PERSONAL_ACCESS_TOKEN", "GITHUB_TOKEN"]
+enabled_tools = ["issue_write"]
+default_tools_approval_mode = "approve"
+
+[mcp_servers.github.env]
+GITHUB_TOOLSETS = "context"
+GITHUB_TOOLS = "issue_write"
+GITHUB_EXCLUDE_TOOLS = "get_me,get_teams,get_team_members"
