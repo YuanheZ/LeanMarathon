@@ -47,9 +47,9 @@ CREATE_WORKTREE: Path = PWL.CREATE_WORKTREE
 CODEX_SESSIONS_ROOT: Path = PWL.CODEX_SESSIONS_ROOT
 PYTHON_BIN: str = PWL.PYTHON_BIN
 
-BLUEPRINTER_CONFIG = REPO_ROOT / "configs" / "Blueprinter"
-REVIEWER_CONFIG = REPO_ROOT / "configs" / "Target-Reviewer"
-REFINER_CONFIG = REPO_ROOT / "configs" / "Refiner"
+BLUEPRINTER_CONFIG = REPO_ROOT / "agents" / "Blueprinter"
+REVIEWER_CONFIG = REPO_ROOT / "agents" / "Target-Reviewer"
+REFINER_CONFIG = REPO_ROOT / "agents" / "Refiner"
 REVIEW_ISSUE_TITLE = "Blueprint target review"
 
 
@@ -815,10 +815,10 @@ def prepare_target_orchestration_root(args: argparse.Namespace) -> Path:
     shutil.copy2(SOURCE_ROOT / ".scripts" / "create-worktree.sh", scripts_dir / "create-worktree.sh")
     shutil.copy2(SOURCE_ROOT / ".scripts" / "verify_blueprint.py", scripts_dir / "verify_blueprint.py")
 
-    PWL.copy_path_fresh(SOURCE_ROOT / "configs" / "Blueprinter", target_root / "configs" / "Blueprinter")
-    PWL.copy_path_fresh(SOURCE_ROOT / "configs" / "Target-Reviewer", target_root / "configs" / "Target-Reviewer")
-    PWL.copy_path_fresh(SOURCE_ROOT / "configs" / "Refiner", target_root / "configs" / "Refiner")
-    PWL.copy_path_fresh(SOURCE_ROOT / "configs" / "Worker", target_root / "configs" / "Worker")
+    PWL.copy_path_fresh(SOURCE_ROOT / "agents" / "Blueprinter", target_root / "agents" / "Blueprinter")
+    PWL.copy_path_fresh(SOURCE_ROOT / "agents" / "Target-Reviewer", target_root / "agents" / "Target-Reviewer")
+    PWL.copy_path_fresh(SOURCE_ROOT / "agents" / "Refiner", target_root / "agents" / "Refiner")
+    PWL.copy_path_fresh(SOURCE_ROOT / "agents" / "Worker", target_root / "agents" / "Worker")
     copy_runtime_input_to_target(args.problem_file, target_root)
     copy_runtime_input_to_target(args.proof_file, target_root)
     return target_root

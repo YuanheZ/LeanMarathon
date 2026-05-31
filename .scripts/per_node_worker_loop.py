@@ -36,8 +36,8 @@ LEAN_PROJECT_ROOT = Path(LEAN_PROJECT_ROOT_LABEL).expanduser().resolve()
 SCRIPTS_DIR = REPO_ROOT / ".scripts"
 CREATE_WORKTREE = SCRIPTS_DIR / "create-worktree.sh"
 VERIFY_BLUEPRINT = SCRIPTS_DIR / "verify_blueprint.py"
-WORKER_CONFIG = REPO_ROOT / "configs" / "Worker"
-REFINER_CONFIG = REPO_ROOT / "configs" / "Refiner"
+WORKER_CONFIG = REPO_ROOT / "agents" / "Worker"
+REFINER_CONFIG = REPO_ROOT / "agents" / "Refiner"
 CODEX_SESSIONS_ROOT = REPO_ROOT / ".codex-session-home"
 PYTHON_BIN = sys.executable
 
@@ -1739,8 +1739,8 @@ def prepare_target_orchestration_root(args: argparse.Namespace) -> Path:
     shutil.copy2(SOURCE_ROOT / ".scripts" / "create-worktree.sh", scripts_dir / "create-worktree.sh")
     shutil.copy2(SOURCE_ROOT / ".scripts" / "verify_blueprint.py", scripts_dir / "verify_blueprint.py")
 
-    copy_path_fresh(SOURCE_ROOT / "configs" / "Worker", target_root / "configs" / "Worker")
-    copy_path_fresh(SOURCE_ROOT / "configs" / "Refiner", target_root / "configs" / "Refiner")
+    copy_path_fresh(SOURCE_ROOT / "agents" / "Worker", target_root / "agents" / "Worker")
+    copy_path_fresh(SOURCE_ROOT / "agents" / "Refiner", target_root / "agents" / "Refiner")
     copy_runtime_input_to_target(args.problem_file, target_root)
     copy_runtime_input_to_target(args.proof_file, target_root)
     return target_root
