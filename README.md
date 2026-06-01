@@ -4,14 +4,7 @@ LeanMarathon is an orchestration system for turning a natural-language
 mathematical proof into a reviewed Lean blueprint, then proving that blueprint
 with parallel Codex agents on a Slurm cluster.
 
-The intended flow is:
-
-```text
-problem statement + proof source
-  -> Stage 1: build and review an initial Lean blueprint
-  -> Stage 2: prove blueprint nodes with parallel Workers
-  -> target GitHub repo main branch with completed Lean proofs
-```
+![LeanMarathon orchestration overview](figs/orchestration_system.png)
 
 LeanMarathon manages GitHub repositories, sparse worktrees, Slurm jobs, Codex
 agent workspaces, runtime inputs, audit logs, and CI handoffs. A normal user
@@ -433,16 +426,7 @@ Run Stage 2 directly:
 leanmarathon stage2 run --owner MyGitHubName --repo MyTargetRepo
 ```
 
-Stage 2 loop:
-
-```text
-fetch current origin/main
-if open issues exist: run Refiner first
-extract Lean-elaborated proof DAG
-dispatch Workers for dynamic leaves
-run Refiner if Workers filed issues
-repeat until all proof nodes are proven or max_rounds is exhausted
-```
+![Stage 2 per-node Worker loop](figs/pipeline_diagram_horizontal.png)
 
 Dynamic leaves are unproven `lemma` or `theorem` nodes whose proof-node
 ancestors are already proven. This prevents Workers from proving descendants
