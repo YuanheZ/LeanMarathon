@@ -1,24 +1,21 @@
 # Agent Contracts
 
-LeanMarathon exposes four agent roles.
+LeanMarathon exposes four Codex agent roles. The role-specific workspace
+templates live under `agents/` and are copied into sparse Git worktrees before
+each job starts.
 
-## Blueprinter
+| Role | Branch pattern | Default prompt | Delivery |
+|---|---|---|---|
+| Blueprinter | `blueprint/init` | `Begin from Phase 1` | Creates the initial Lean blueprint and delivers a CI-green PR merged into `main`. |
+| Target-Reviewer | `target-review/round-<n>` | `Begin the work.` | Audits theorem nodes against canonical targets and exits cleanly or files a grouped issue titled `Blueprint target review`. |
+| Refiner | `blueprint-refiner/round-<n>` in Stage 1, `refiner/round-<n>` in Stage 2 | `Begin from Phase 1` | Repairs open issues and delivers a CI-green PR merged into `main`. |
+| Worker | `round-<n>/<target_node>` | `Begin from Phase 1` | Proves one Stage 2 dynamic leaf, or files a blocker issue. |
 
-Creates the initial Lean blueprint from the problem file and proof source.
-Delivery endpoint: a CI-green PR merged into `main`.
+Blueprinter, Refiner, and successful Worker jobs run with stop hooks that keep
+the agent alive until the delivered PR is CI-green and merged. Target-Reviewer
+does not use a stop hook. A blocked Worker may finish by filing an issue.
 
-## Target-Reviewer
-
-Read-only target auditor. It compares canonical problem statements against
-the blueprint theorem nodes. Delivery endpoint: clean exit or a grouped
-GitHub issue titled `Blueprint target review`.
-
-## Refiner
-
-Repairs grouped blueprint issues or Worker blocker issues. Delivery endpoint:
-a CI-green repair PR merged into `main`.
-
-## Worker
-
-Proves one dynamic-leaf proof node in Stage 2. Delivery endpoint: either a
-CI-green PR merged into `main`, or a blocker issue.
+Custom prompts can be supplied at `leanmarathon init` with
+`--blueprinter-prompt`, `--target-reviewer-prompt`, `--refiner-prompt`, and
+`--worker-prompt`. Default prompts are not written to prompt files; custom
+prompts are stored in local target config and materialized inside worktrees.

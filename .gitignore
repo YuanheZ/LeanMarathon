@@ -3,6 +3,9 @@ __pycache__/
 .venv
 .venv/
 .leanmarathon.local.toml
+/lakefile.toml
+/lake-manifest.json
+/lean-toolchain
 .lake
 .lake/
 .orchestrator-repos/

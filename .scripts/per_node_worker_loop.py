@@ -2093,7 +2093,7 @@ def parse_args() -> argparse.Namespace:
         "--agent-resource",
         choices=("cpu", "gpu"),
         default=AGENT_RESOURCE_MODE,
-        help="Slurm resource mode for worker/refiner jobs; gpu requests one A100",
+        help="Slurm resource mode for worker/refiner jobs; gpu uses configured Slurm GPU directives",
     )
     parser.add_argument("--worker-prompt")
     parser.add_argument("--refiner-prompt")

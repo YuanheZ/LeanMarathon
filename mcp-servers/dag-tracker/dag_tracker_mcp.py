@@ -116,7 +116,7 @@ def load_verifier(config: ServerConfig) -> Any:
     if _VERIFIER_MODULE is not None:
         return _VERIFIER_MODULE
 
-    spec = importlib.util.spec_from_file_location("openclean_verify_blueprint", config.verifier_path)
+    spec = importlib.util.spec_from_file_location("leanmarathon_verify_blueprint", config.verifier_path)
     if spec is None or spec.loader is None:
         raise DagTrackerError(f"could not load verifier module from {config.verifier_path}")
     module = importlib.util.module_from_spec(spec)
