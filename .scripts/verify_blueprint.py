@@ -327,6 +327,7 @@ def _find_top_level_break(text: str, start: int) -> int:
 _BLUEPRINT_HEAD = re.compile(r"@\[blueprint\s+\"([^\"]+)\"")
 _ATTR_OPEN_RE = re.compile(r"@\[")
 _BLUEPRINT_TOKEN_RE = re.compile(r"\bblueprint\s+\"([^\"]+)\"")
+_BLUEPRINT_PROSE_FIELDS = frozenset({"statement", "proof", "title"})
 
 
 def mask_comments_only(text: str) -> str:
@@ -362,6 +363,101 @@ def mask_comments_only(text: str) -> str:
             continue
         i += 1
     return "".join(out)
+
+
+def blueprint_prose_comment_spans(text: str) -> set[tuple[int, int]]:
+    """Return the spans of the `/-- ... -/` comments that are legitimate
+    LeanArchitect prose carriers inside blueprint attributes.
+
+    General Lean comments are forbidden in production blueprint files because
+    they can hide archived declarations from the parser and DAG checks. The
+    only permitted comments are the `statement`, `proof`, and `title` field
+    values required by the `@[blueprint ...]` syntax.
+    """
+    masked_for_attrs = mask_comments_only(text)
+    spans: set[tuple[int, int]] = set()
+    seen_attr_starts: set[int] = set()
+    for m in _ATTR_OPEN_RE.finditer(masked_for_attrs):
+        attr_start = m.start()
+        if attr_start in seen_attr_starts:
+            continue
+        seen_attr_starts.add(attr_start)
+        bracket_open = attr_start + 1
+        try:
+            bracket_close = find_balanced(text, bracket_open, "[", "]")
+        except ValueError:
+            continue
+        body_start = bracket_open + 1
+        body = text[body_start:bracket_close]
+        if not _BLUEPRINT_TOKEN_RE.search(body):
+            continue
+        i = 0
+        while i < len(body):
+            if body[i] != "(":
+                i += 1
+                continue
+            try:
+                end = find_balanced(body, i, "(", ")")
+            except ValueError:
+                break
+            inner = body[i + 1 : end]
+            fm = re.match(r"\s*(\w+)\s*:=\s*", inner, re.DOTALL)
+            if fm and fm.group(1) in _BLUEPRINT_PROSE_FIELDS:
+                value_start = body_start + i + 1 + fm.end()
+                while value_start < body_start + end and text[value_start] in " \t\n\r":
+                    value_start += 1
+                if text.startswith("/--", value_start):
+                    value_end = _skip_block_comment(text, value_start)
+                    if value_end <= body_start + end:
+                        spans.add((value_start, value_end))
+            i = end + 1
+    return spans
+
+
+def scan_comment_hygiene(text: str, path: Path) -> list[str]:
+    """Reject Lean comments except blueprint prose field doc-comments."""
+    allowed_spans = blueprint_prose_comment_spans(text)
+    failures: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                if text[j] == "\\" and j + 1 < n:
+                    j += 2
+                else:
+                    j += 1
+            i = j + 1
+            continue
+        if text.startswith("/-", i):
+            end = _skip_block_comment(text, i)
+            if (i, end) not in allowed_spans:
+                line = line_of_offset(text, i)
+                if text.startswith("/-!", i):
+                    kind = "module doc comment"
+                elif text.startswith("/--", i):
+                    kind = "doc comment"
+                else:
+                    kind = "block comment"
+                failures.append(
+                    f"{path}:{line}: Lean {kind} is not allowed in blueprint files. "
+                    "Delete obsolete code instead of commenting it out; only "
+                    "`statement`, `proof`, and `title` blueprint field doc-comments are allowed."
+                )
+            i = end
+            continue
+        if text.startswith("--", i):
+            line = line_of_offset(text, i)
+            failures.append(
+                f"{path}:{line}: Lean line comments are not allowed in blueprint files. "
+                "Put explanatory prose in blueprint fields and delete obsolete code outright."
+            )
+            j = text.find("\n", i)
+            i = j if j != -1 else n
+            continue
+        i += 1
+    return failures
 
 _CREF_RE = re.compile(r"\\[Cc]ref\{([^}]+)\}")
 
@@ -580,6 +676,7 @@ def scan_node_spacing(text: str, path: Path, nodes: list[Node]) -> list[str]:
 
 def parse_file(path: Path) -> tuple[list[Node], list[str]]:
     text = path.read_text()
+    comment_failures = scan_comment_hygiene(text, path)
     masked_for_attrs = mask_comments_only(text)
     nodes: list[Node] = []
     seen_attr_starts: set[int] = set()
@@ -698,7 +795,8 @@ def parse_file(path: Path) -> tuple[list[Node], list[str]]:
             )
         )
     masked = mask_comments_and_strings(text)
-    anomalies = scan_anomalies(masked, path, nodes)
+    anomalies = comment_failures
+    anomalies.extend(scan_anomalies(masked, path, nodes))
     anomalies.extend(scan_node_spacing(text, path, nodes))
     return nodes, anomalies
 

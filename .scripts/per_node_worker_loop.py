@@ -65,6 +65,7 @@ ORCH_CPUS = int(os.environ.get("ORCH_CPUS", "8"))
 ORCH_TIME = os.environ.get("ORCH_TIME", "48:00:00")
 ORCH_RESOURCE_MODE = os.environ.get("ORCH_RESOURCE_MODE", "cpu").strip().lower()
 POLL_SECONDS = 120
+DEFAULT_START_PROMPT = "Begin from Phase 1"
 NUMERIC_TOOL_IMPORTS = {
     item.strip()
     for item in os.environ.get("LEANMARATHON_NUMERIC_TOOLS", "").split(",")
@@ -93,13 +94,18 @@ def run_cmd(
     args: list[str],
     *,
     cwd: Path = REPO_ROOT,
+    env: dict[str, str] | None = None,
     check: bool = True,
     text: bool = True,
     input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    merged_env = os.environ.copy()
+    if env:
+        merged_env.update(env)
     proc = subprocess.run(
         args,
         cwd=str(cwd),
+        env=merged_env,
         text=text,
         input=input_text,
         stdout=subprocess.PIPE,
@@ -162,6 +168,7 @@ class AgentRun:
     result_file: str
     target_node: str | None = None
     tag: str | None = None
+    start_prompt_file: str | None = None
 
     def audit_record(self) -> dict[str, Any]:
         record: dict[str, Any] = {
@@ -179,6 +186,8 @@ class AgentRun:
             record["target_node"] = self.target_node
         if self.tag is not None:
             record["tag"] = self.tag
+        if self.start_prompt_file is not None:
+            record["start_prompt_file"] = self.start_prompt_file
         return record
 
 
@@ -254,11 +263,15 @@ def validate_paths(branch_main: str, worktrees_root: Path) -> None:
     if not worktrees_root.is_absolute():
         raise ValueError(f"--worktrees-root must be absolute, got {worktrees_root}")
     actual = worktrees_root.resolve()
+    allowed_lake_root = LEAN_PROJECT_ROOT.resolve()
     for parent in (actual, *actual.parents):
         if (parent / "lakefile.toml").exists():
+            if parent.resolve() == allowed_lake_root:
+                break
             raise ValueError(
                 f"--worktrees-root must not be inside a Lake project; found {parent / 'lakefile.toml'} "
-                f"above {actual}. Put agent worktrees in external runtime state."
+                f"above {actual}. Put agent worktrees outside Lake projects except the configured "
+                f"ORCHESTRATOR_LEAN_PROJECT_ROOT={allowed_lake_root}."
             )
     for path in (CREATE_WORKTREE, VERIFY_BLUEPRINT, WORKER_CONFIG, REFINER_CONFIG):
         if not path.exists():
@@ -435,6 +448,7 @@ def create_worktree(
     if worktree.exists():
         raise FileExistsError(f"worktree already exists: {worktree}")
     worktree.parent.mkdir(parents=True, exist_ok=True)
+    auth_env = git_auth_env()
 
     run_cmd(
         [
@@ -450,7 +464,8 @@ def create_worktree(
             owner,
             "--repo",
             repo,
-        ]
+        ],
+        env=auth_env,
     )
     actual = run_cmd(["git", "-C", str(worktree), "rev-parse", "HEAD"]).stdout.strip()
     if actual != base_commit:
@@ -459,7 +474,7 @@ def create_worktree(
             "after create-worktree.sh fetched a newer main"
         )
         run_cmd(["git", "-C", str(worktree), "reset", "--hard", base_commit])
-        run_cmd(["git", "-C", str(worktree), "push", "--force-with-lease", "origin", branch])
+        run_cmd(["git", "-C", str(worktree), "push", "--force-with-lease", "origin", branch], env=auth_env)
     return worktree
 
 
@@ -497,6 +512,62 @@ def ensure_problem_file(worktree: Path, problem_file: str, base_commit: str) -> 
 
 def ensure_proof_file(worktree: Path, proof_file: str, base_commit: str) -> None:
     ensure_worktree_file(worktree, proof_file, base_commit, label="proof_file")
+
+
+def materialize_agent_input(
+    worktree: Path,
+    value: str,
+    base_commit: str,
+    *,
+    label: str,
+    dest_dir: str,
+) -> str:
+    path = Path(value)
+    if not path.is_absolute():
+        ensure_worktree_file(worktree, value, base_commit, label=label)
+        return value
+    source = path.resolve()
+    if not source.exists():
+        raise FileNotFoundError(f"{label} {value!r} does not exist")
+    dest_base = worktree / "docs" / "runtime-inputs" / dest_dir
+    dest = dest_base / source.name if source.is_file() else dest_base
+    copy_path_fresh(source, dest)
+    return str(dest.relative_to(worktree))
+
+
+def materialize_problem_file(worktree: Path, problem_file: str, base_commit: str) -> str:
+    return materialize_agent_input(
+        worktree,
+        problem_file,
+        base_commit,
+        label="problem_file",
+        dest_dir="problem",
+    )
+
+
+def materialize_proof_file(worktree: Path, proof_file: str, base_commit: str) -> str:
+    return materialize_agent_input(
+        worktree,
+        proof_file,
+        base_commit,
+        label="proof_file",
+        dest_dir="proof",
+    )
+
+
+def materialize_start_prompt(
+    worktree: Path,
+    start_prompt: str | None,
+    *,
+    default_prompt: str = DEFAULT_START_PROMPT,
+) -> Path | None:
+    prompt = default_prompt if start_prompt is None else start_prompt
+    if prompt == default_prompt:
+        return None
+    prompt_file = worktree / ".codex" / "start-prompt.txt"
+    prompt_file.parent.mkdir(parents=True, exist_ok=True)
+    prompt_file.write_text(prompt, encoding="utf-8")
+    return prompt_file
 
 
 def replace_toml_string(text: str, key: str, value: str) -> str:
@@ -809,13 +880,17 @@ def leanmarathon_env_exports() -> str:
     return "\n".join(
         f"export {key}={shlex.quote(value)}"
         for key, value in sorted(os.environ.items())
-        if key.startswith("LEANMARATHON_")
+        if key.startswith("LEANMARATHON_") and key != "LEANMARATHON_GITHUB_TOKEN"
     )
 
 
 def github_auth_bootstrap() -> str:
-    return """if [[ -z "${GITHUB_TOKEN:-}" && -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1; then
-  _leanmarathon_gh_token="$(gh auth token 2>/dev/null || true)"
+    return """if [[ -n "${LEANMARATHON_GITHUB_TOKEN:-}" ]]; then
+  export GITHUB_TOKEN="$LEANMARATHON_GITHUB_TOKEN"
+  export GITHUB_PERSONAL_ACCESS_TOKEN="$LEANMARATHON_GITHUB_TOKEN"
+fi
+if [[ -z "${GITHUB_TOKEN:-}" && -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1; then
+  _leanmarathon_gh_token="$(env -u GITHUB_TOKEN -u GITHUB_PERSONAL_ACCESS_TOKEN -u GH_TOKEN gh auth token 2>/dev/null || true)"
   if [[ -n "$_leanmarathon_gh_token" ]]; then
     export GITHUB_TOKEN="$_leanmarathon_gh_token"
     export GITHUB_PERSONAL_ACCESS_TOKEN="$_leanmarathon_gh_token"
@@ -827,7 +902,71 @@ if [[ -n "${GITHUB_TOKEN:-}" && -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]]; then
 fi
 if [[ -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" && -z "${GITHUB_TOKEN:-}" ]]; then
   export GITHUB_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"
+fi
+if [[ -n "${GITHUB_TOKEN:-}" || -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]]; then
+  _leanmarathon_askpass="${TMPDIR:-/tmp}/leanmarathon-git-askpass-${USER:-user}.sh"
+  cat > "$_leanmarathon_askpass" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  *Username*) printf "%s" "x-access-token" ;;
+  *) printf "%s" "${GITHUB_TOKEN:-${GITHUB_PERSONAL_ACCESS_TOKEN:-}}" ;;
+esac
+EOF
+  chmod 700 "$_leanmarathon_askpass"
+  export GIT_ASKPASS="$_leanmarathon_askpass"
+  export GIT_TERMINAL_PROMPT=0
+  unset _leanmarathon_askpass
 fi"""
+
+
+def git_auth_env() -> dict[str, str]:
+    token = (
+        os.environ.get("LEANMARATHON_GITHUB_TOKEN", "")
+        or os.environ.get("GITHUB_TOKEN", "")
+        or os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN", "")
+        or os.environ.get("GH_TOKEN", "")
+    )
+    if not token:
+        env = os.environ.copy()
+        env["PATH"] = ORCH_PATH + (f":{env.get('PATH')}" if env.get("PATH") else "")
+        for key in ("GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", "GH_TOKEN"):
+            env.pop(key, None)
+        try:
+            proc = subprocess.run(
+                ["gh", "auth", "token"],
+                cwd=str(SOURCE_ROOT),
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            proc = subprocess.CompletedProcess(args=["gh", "auth", "token"], returncode=127, stdout="", stderr="")
+        if proc.returncode == 0:
+            token = proc.stdout.strip()
+    if not token:
+        return {}
+    helper = Path(tempfile.gettempdir()) / f"leanmarathon-git-askpass-{os.environ.get('USER', 'user')}.sh"
+    helper.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'case "${1:-}" in',
+                '  *Username*) printf "%s" "x-access-token" ;;',
+                '  *) printf "%s" "${GITHUB_TOKEN:-${GITHUB_PERSONAL_ACCESS_TOKEN:-}}" ;;',
+                "esac",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    helper.chmod(0o700)
+    return {
+        "GIT_ASKPASS": str(helper),
+        "GIT_TERMINAL_PROMPT": "0",
+        "GITHUB_TOKEN": token,
+        "GITHUB_PERSONAL_ACCESS_TOKEN": token,
+    }
 
 
 def make_agent_job_script(
@@ -839,11 +978,16 @@ def make_agent_job_script(
     result_file: Path,
     codex_home: Path,
     agent_resource: str = AGENT_RESOURCE_MODE,
+    start_prompt_file: Path | None = None,
+    start_prompt_default: str = DEFAULT_START_PROMPT,
 ) -> None:
     account = agent_slurm_account(agent_resource)
     account_line = account_directive(account)
     resource_directives = agent_resource_directives(agent_resource)
     env_exports = leanmarathon_env_exports()
+    start_prompt_file_value = shlex.quote(str(start_prompt_file)) if start_prompt_file else '""'
+    default_start_prompt_value = shlex.quote(start_prompt_default)
+    default_start_prompt_json = json.dumps(start_prompt_default)
     script = f"""#!/usr/bin/env bash
 {account_line}
 #SBATCH --nodes=1
@@ -941,7 +1085,13 @@ config.write_text("\\n".join(out), encoding="utf-8")
 PY
 cd {shlex.quote(str(worktree))}
 START_TS="$(date +%s)"
-codex exec "Begin from Phase 1"
+START_PROMPT_FILE={start_prompt_file_value}
+if [[ -n "$START_PROMPT_FILE" ]]; then
+  START_PROMPT="$(cat "$START_PROMPT_FILE")"
+else
+  START_PROMPT={default_start_prompt_value}
+fi
+codex exec "$START_PROMPT"
 RC=$?
 if [[ "$RC" -eq 0 ]]; then
 python3 - {shlex.quote(str(worktree))} <<'PY'
@@ -1018,7 +1168,7 @@ if [[ "$GUARD_RC" -ne 0 ]]; then
   RC="$GUARD_RC"
 fi
 fi
-python3 - "$CODEX_HOME" {shlex.quote(str(result_file))} "$RC" "$START_TS" <<'PY'
+python3 - "$CODEX_HOME" {shlex.quote(str(result_file))} "$RC" "$START_TS" "$START_PROMPT_FILE" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -1027,6 +1177,8 @@ codex_home = Path(sys.argv[1])
 result = Path(sys.argv[2])
 rc = int(sys.argv[3])
 start_ts = int(sys.argv[4])
+prompt_file_raw = sys.argv[5]
+start_prompt = Path(prompt_file_raw).read_text(encoding="utf-8") if prompt_file_raw else {default_start_prompt_json}
 sessions = []
 history = codex_home / "history.jsonl"
 if history.exists():
@@ -1036,7 +1188,7 @@ if history.exists():
                 item = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if item.get("text") != "Begin from Phase 1":
+            if item.get("text") != start_prompt:
                 continue
             try:
                 ts = int(item.get("ts", 0))
@@ -1049,6 +1201,7 @@ payload = {{
     "returncode": rc,
     "codex_session_id": sessions[-1] if sessions else None,
     "session_candidates": sessions,
+    "start_prompt_file": prompt_file_raw or None,
 }}
 result.parent.mkdir(parents=True, exist_ok=True)
 tmp = result.with_suffix(result.suffix + ".tmp")
@@ -1108,7 +1261,7 @@ exit "$RC"
 
 
 def submit_job(job_file: Path) -> str:
-    proc = run_cmd(["sbatch", "--parsable", str(job_file)])
+    proc = run_cmd(["sbatch", "--parsable", "--export=ALL", str(job_file)])
     return proc.stdout.strip().split(";", 1)[0]
 
 
@@ -1179,6 +1332,8 @@ def launch_agents(
             result_file=result_file,
             codex_home=codex_home,
             agent_resource=agent_resource,
+            start_prompt_file=Path(handle["start_prompt_file"]) if handle.get("start_prompt_file") else None,
+            start_prompt_default=str(handle.get("start_prompt_default", DEFAULT_START_PROMPT)),
         )
         job_id = submit_job(job_file)
         log(f"submitted {handle['kind']} {label} as Slurm job {job_id}")
@@ -1201,6 +1356,7 @@ def launch_agents(
             result_file=str(result_file),
             target_node=handle.get("target_node"),
             tag=handle.get("tag"),
+            start_prompt_file=result.get("start_prompt_file") or handle.get("start_prompt_file"),
         )
         runs.append(run)
         if run.returncode == 0:
@@ -1228,16 +1384,18 @@ def preallocate_worker(
     lean_file: str,
     problem_file: str,
     base_commit: str,
+    start_prompt: str | None = None,
 ) -> dict[str, Any]:
     branch = f"round-{round_id}/{branch_slug(target_node)}"
     worktree = create_worktree(branch, WORKER_CONFIG, owner, repo, base_commit, worktrees_root=worktrees_root)
-    ensure_problem_file(worktree, problem_file, base_commit)
+    local_problem_file = materialize_problem_file(worktree, problem_file, base_commit)
+    start_prompt_file = materialize_start_prompt(worktree, start_prompt)
     patch_codex_config(worktree, lean_file, target_node=target_node)
     write_worker_inputs(
         worktree,
         target_node=target_node,
         lean_file=lean_file,
-        problem_file=problem_file,
+        problem_file=local_problem_file,
         owner=owner,
         repo=repo,
         branch=branch,
@@ -1249,6 +1407,8 @@ def preallocate_worker(
         "branch": branch,
         "worktree": str(worktree),
         "base_commit": base_commit,
+        "start_prompt_file": str(start_prompt_file) if start_prompt_file else None,
+        "start_prompt_default": DEFAULT_START_PROMPT,
     }
 
 
@@ -1263,19 +1423,21 @@ def preallocate_refiner(
     proof_file: str,
     base_commit: str,
     issues: list[dict[str, Any]],
+    start_prompt: str | None = None,
 ) -> dict[str, Any]:
     round_match = re.fullmatch(r"round-(\d+)", tag)
     branch = f"refiner/round-{round_match.group(1)}" if round_match else f"refiner/{branch_slug(tag)}"
     worktree = create_worktree(branch, REFINER_CONFIG, owner, repo, base_commit, worktrees_root=worktrees_root)
-    ensure_problem_file(worktree, problem_file, base_commit)
-    ensure_proof_file(worktree, proof_file, base_commit)
+    local_problem_file = materialize_problem_file(worktree, problem_file, base_commit)
+    local_proof_file = materialize_proof_file(worktree, proof_file, base_commit)
+    start_prompt_file = materialize_start_prompt(worktree, start_prompt)
     render_issue_context(worktree, owner, repo, issues)
     patch_codex_config(worktree, lean_file)
     write_refiner_inputs(
         worktree,
         lean_file=lean_file,
-        problem_file=problem_file,
-        proof_file=proof_file,
+        problem_file=local_problem_file,
+        proof_file=local_proof_file,
         owner=owner,
         repo=repo,
         branch=branch,
@@ -1288,6 +1450,8 @@ def preallocate_refiner(
         "worktree": str(worktree),
         "base_commit": base_commit,
         "issue_numbers": [int(issue["number"]) for issue in issues],
+        "start_prompt_file": str(start_prompt_file) if start_prompt_file else None,
+        "start_prompt_default": DEFAULT_START_PROMPT,
     }
 
 
@@ -1427,6 +1591,7 @@ def run_refiner_for_open_issues(
         proof_file=args.proof_file,
         base_commit=base_commit,
         issues=open_issues,
+        start_prompt=args.refiner_prompt,
     )
     refiner_run = launch_agents(
         [refiner_handle],
@@ -1610,6 +1775,7 @@ def per_node_loop(args: argparse.Namespace) -> LoopState:
                 lean_file=args.lean_file,
                 problem_file=args.problem_file,
                 base_commit=commit,
+                start_prompt=args.worker_prompt,
             )
             for node in ordered
         ]
@@ -1684,7 +1850,7 @@ def target_orchestration_root(owner: str, repo: str) -> Path:
 
 
 def target_worktrees_root(owner: str, repo: str) -> Path:
-    return SOURCE_ROOT / ".leanmarathon-targets" / branch_slug(owner) / branch_slug(repo) / "worktrees"
+    return LEAN_PROJECT_ROOT / ".leanmarathon-worktrees" / branch_slug(owner) / branch_slug(repo)
 
 
 def copy_path_fresh(source: Path, dest: Path) -> None:
@@ -1731,15 +1897,16 @@ def prepare_target_orchestration_root(args: argparse.Namespace) -> Path:
     target_root = target_orchestration_root(args.owner, args.repo)
     target_root.parent.mkdir(parents=True, exist_ok=True)
     expected_origin = target_repo_url(args.owner, args.repo)
+    auth_env = git_auth_env()
 
     if not target_root.exists():
         log(f"creating per-target orchestration root at {target_root}")
-        run_cmd(["git", "clone", expected_origin, str(target_root)], cwd=SOURCE_ROOT)
+        run_cmd(["git", "clone", expected_origin, str(target_root)], cwd=SOURCE_ROOT, env=auth_env)
     elif not (target_root / ".git").exists():
         raise RuntimeError(f"target orchestration root exists but is not a git repo: {target_root}")
 
     run_cmd(["git", "-C", str(target_root), "remote", "set-url", "origin", expected_origin])
-    run_cmd(["git", "-C", str(target_root), "fetch", "origin", args.branch_main])
+    run_cmd(["git", "-C", str(target_root), "fetch", "origin", args.branch_main], env=auth_env)
     branch_check = run_cmd(
         ["git", "-C", str(target_root), "rev-parse", "--verify", args.branch_main],
         check=False,
@@ -1748,7 +1915,7 @@ def prepare_target_orchestration_root(args: argparse.Namespace) -> Path:
         run_cmd(["git", "-C", str(target_root), "checkout", args.branch_main])
     else:
         run_cmd(["git", "-C", str(target_root), "checkout", "-b", args.branch_main, f"origin/{args.branch_main}"])
-    run_cmd(["git", "-C", str(target_root), "pull", "--ff-only", "origin", args.branch_main])
+    run_cmd(["git", "-C", str(target_root), "pull", "--ff-only", "origin", args.branch_main], env=auth_env)
 
     scripts_dir = target_root / ".scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)
@@ -1928,6 +2095,8 @@ def parse_args() -> argparse.Namespace:
         default=AGENT_RESOURCE_MODE,
         help="Slurm resource mode for worker/refiner jobs; gpu requests one A100",
     )
+    parser.add_argument("--worker-prompt")
+    parser.add_argument("--refiner-prompt")
     parser.add_argument("--submit-self", action="store_true", help="submit the orchestrator itself as a Slurm job")
     parser.add_argument("--dry-run", action="store_true", help="only extract the current DAG frontier")
     return parser.parse_args()

@@ -51,6 +51,7 @@ BLUEPRINTER_CONFIG = REPO_ROOT / "agents" / "Blueprinter"
 REVIEWER_CONFIG = REPO_ROOT / "agents" / "Target-Reviewer"
 REFINER_CONFIG = REPO_ROOT / "agents" / "Refiner"
 REVIEW_ISSUE_TITLE = "Blueprint target review"
+TARGET_REVIEWER_DEFAULT_START_PROMPT = "Begin the work."
 
 
 def log(message: str) -> None:
@@ -103,11 +104,15 @@ def validate_stage1_paths(branch_main: str, worktrees_root: Path) -> None:
     if not worktrees_root.is_absolute():
         raise ValueError(f"--worktrees-root must be absolute, got {worktrees_root}")
     actual = worktrees_root.resolve()
+    allowed_lake_root = PWL.LEAN_PROJECT_ROOT.resolve()
     for parent in (actual, *actual.parents):
         if (parent / "lakefile.toml").exists():
+            if parent.resolve() == allowed_lake_root:
+                break
             raise ValueError(
                 f"--worktrees-root must not be inside a Lake project; found {parent / 'lakefile.toml'} "
-                f"above {actual}. Put agent worktrees in external runtime state."
+                f"above {actual}. Put agent worktrees outside Lake projects except the configured "
+                f"ORCHESTRATOR_LEAN_PROJECT_ROOT={allowed_lake_root}."
             )
     for path in (CREATE_WORKTREE, BLUEPRINTER_CONFIG, REVIEWER_CONFIG, REFINER_CONFIG):
         if not path.exists():
@@ -210,17 +215,19 @@ def preallocate_blueprinter(
     problem_file: str,
     proof_file: str,
     base_commit: str,
+    start_prompt: str | None = None,
 ) -> dict[str, Any]:
     branch = "blueprint/init"
     worktree = PWL.create_worktree(branch, BLUEPRINTER_CONFIG, owner, repo, base_commit, worktrees_root=worktrees_root)
-    PWL.ensure_problem_file(worktree, problem_file, base_commit)
-    PWL.ensure_proof_file(worktree, proof_file, base_commit)
+    local_problem_file = PWL.materialize_problem_file(worktree, problem_file, base_commit)
+    local_proof_file = PWL.materialize_proof_file(worktree, proof_file, base_commit)
+    start_prompt_file = PWL.materialize_start_prompt(worktree, start_prompt)
     patch_codex_config_for_agent(worktree, lean_file, allow_hook=True)
     write_blueprinter_inputs(
         worktree,
         lean_file=lean_file,
-        problem_file=problem_file,
-        proof_file=proof_file,
+        problem_file=local_problem_file,
+        proof_file=local_proof_file,
         owner=owner,
         repo=repo,
         branch=branch,
@@ -232,6 +239,8 @@ def preallocate_blueprinter(
         "branch": branch,
         "worktree": str(worktree),
         "base_commit": base_commit,
+        "start_prompt_file": str(start_prompt_file) if start_prompt_file else None,
+        "start_prompt_default": PWL.DEFAULT_START_PROMPT,
     }
 
 
@@ -244,15 +253,21 @@ def preallocate_reviewer(
     lean_file: str,
     problem_file: str,
     base_commit: str,
+    start_prompt: str | None = None,
 ) -> dict[str, Any]:
     branch = f"target-review/round-{round_id}"
     worktree = PWL.create_worktree(branch, REVIEWER_CONFIG, owner, repo, base_commit, worktrees_root=worktrees_root)
-    PWL.ensure_problem_file(worktree, problem_file, base_commit)
+    local_problem_file = PWL.materialize_problem_file(worktree, problem_file, base_commit)
+    start_prompt_file = PWL.materialize_start_prompt(
+        worktree,
+        start_prompt,
+        default_prompt=TARGET_REVIEWER_DEFAULT_START_PROMPT,
+    )
     patch_codex_config_for_agent(worktree, lean_file, allow_hook=False)
     write_reviewer_inputs(
         worktree,
         lean_file=lean_file,
-        problem_file=problem_file,
+        problem_file=local_problem_file,
         owner=owner,
         repo=repo,
         branch=branch,
@@ -264,6 +279,8 @@ def preallocate_reviewer(
         "branch": branch,
         "worktree": str(worktree),
         "base_commit": base_commit,
+        "start_prompt_file": str(start_prompt_file) if start_prompt_file else None,
+        "start_prompt_default": TARGET_REVIEWER_DEFAULT_START_PROMPT,
     }
 
 
@@ -278,18 +295,20 @@ def preallocate_stage1_refiner(
     proof_file: str,
     base_commit: str,
     issues: list[dict[str, Any]],
+    start_prompt: str | None = None,
 ) -> dict[str, Any]:
     branch = f"blueprint-refiner/round-{round_id}"
     worktree = PWL.create_worktree(branch, REFINER_CONFIG, owner, repo, base_commit, worktrees_root=worktrees_root)
-    PWL.ensure_problem_file(worktree, problem_file, base_commit)
-    PWL.ensure_proof_file(worktree, proof_file, base_commit)
+    local_problem_file = PWL.materialize_problem_file(worktree, problem_file, base_commit)
+    local_proof_file = PWL.materialize_proof_file(worktree, proof_file, base_commit)
+    start_prompt_file = PWL.materialize_start_prompt(worktree, start_prompt)
     PWL.render_issue_context(worktree, owner, repo, issues)
     PWL.patch_codex_config(worktree, lean_file)
     PWL.write_refiner_inputs(
         worktree,
         lean_file=lean_file,
-        problem_file=problem_file,
-        proof_file=proof_file,
+        problem_file=local_problem_file,
+        proof_file=local_proof_file,
         owner=owner,
         repo=repo,
         branch=branch,
@@ -302,6 +321,8 @@ def preallocate_stage1_refiner(
         "worktree": str(worktree),
         "base_commit": base_commit,
         "issue_numbers": [int(issue["number"]) for issue in issues],
+        "start_prompt_file": str(start_prompt_file) if start_prompt_file else None,
+        "start_prompt_default": PWL.DEFAULT_START_PROMPT,
     }
 
 
@@ -326,9 +347,14 @@ def make_reviewer_job_script(
     result_file: Path,
     codex_home: Path,
     agent_resource: str,
+    start_prompt_file: Path | None = None,
+    start_prompt_default: str = TARGET_REVIEWER_DEFAULT_START_PROMPT,
 ) -> None:
     account = PWL.agent_slurm_account(agent_resource)
     resource_directives = PWL.agent_resource_directives(agent_resource)
+    start_prompt_file_value = shlex.quote(str(start_prompt_file)) if start_prompt_file else '""'
+    default_start_prompt_value = shlex.quote(start_prompt_default)
+    default_start_prompt_json = json.dumps(start_prompt_default)
     script = f"""#!/usr/bin/env bash
 #SBATCH --account={account}
 #SBATCH --nodes=1
@@ -420,9 +446,15 @@ config.write_text("\\n".join(out), encoding="utf-8")
 PY
 cd {shlex.quote(str(worktree))}
 START_TS="$(date +%s)"
-codex exec "Begin from Phase 1"
+START_PROMPT_FILE={start_prompt_file_value}
+if [[ -n "$START_PROMPT_FILE" ]]; then
+  START_PROMPT="$(cat "$START_PROMPT_FILE")"
+else
+  START_PROMPT={default_start_prompt_value}
+fi
+codex exec "$START_PROMPT"
 RC=$?
-python3 - "$CODEX_HOME" {shlex.quote(str(result_file))} "$RC" "$START_TS" <<'PY'
+python3 - "$CODEX_HOME" {shlex.quote(str(result_file))} "$RC" "$START_TS" "$START_PROMPT_FILE" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -431,6 +463,8 @@ codex_home = Path(sys.argv[1])
 result = Path(sys.argv[2])
 rc = int(sys.argv[3])
 start_ts = int(sys.argv[4])
+prompt_file_raw = sys.argv[5]
+start_prompt = Path(prompt_file_raw).read_text(encoding="utf-8") if prompt_file_raw else {default_start_prompt_json}
 sessions = []
 history = codex_home / "history.jsonl"
 if history.exists():
@@ -440,7 +474,7 @@ if history.exists():
                 item = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if item.get("text") != "Begin from Phase 1":
+            if item.get("text") != start_prompt:
                 continue
             try:
                 ts = int(item.get("ts", 0))
@@ -453,6 +487,7 @@ payload = {{
     "returncode": rc,
     "codex_session_id": sessions[-1] if sessions else None,
     "session_candidates": sessions,
+    "start_prompt_file": prompt_file_raw or None,
 }}
 result.parent.mkdir(parents=True, exist_ok=True)
 tmp = result.with_suffix(result.suffix + ".tmp")
@@ -534,6 +569,8 @@ def launch_reviewer(
         result_file=result_file,
         codex_home=codex_home,
         agent_resource=agent_resource,
+        start_prompt_file=Path(handle["start_prompt_file"]) if handle.get("start_prompt_file") else None,
+        start_prompt_default=str(handle.get("start_prompt_default", TARGET_REVIEWER_DEFAULT_START_PROMPT)),
     )
     job_id = PWL.submit_job(job_file)
     log(f"submitted {handle['kind']} {label} as Slurm job {job_id}")
@@ -551,6 +588,7 @@ def launch_reviewer(
         state=state,
         result_file=str(result_file),
         tag=handle.get("tag"),
+        start_prompt_file=result.get("start_prompt_file") or handle.get("start_prompt_file"),
     )
     if run.returncode == 0:
         return run
@@ -600,6 +638,7 @@ def run_refiner_for_issues(
         proof_file=args.proof_file,
         base_commit=base_commit,
         issues=issues,
+        start_prompt=args.refiner_prompt,
     )
     run = launch_single_agent(
         handle,
@@ -646,6 +685,7 @@ def stage1_loop(args: argparse.Namespace) -> Stage1State:
             problem_file=args.problem_file,
             proof_file=args.proof_file,
             base_commit=commit,
+            start_prompt=args.blueprinter_prompt,
         )
         run = launch_single_agent(
             handle,
@@ -712,6 +752,7 @@ def stage1_loop(args: argparse.Namespace) -> Stage1State:
             lean_file=args.lean_file,
             problem_file=args.problem_file,
             base_commit=commit,
+            start_prompt=args.target_reviewer_prompt,
         )
         run = launch_reviewer(
             handle,
@@ -791,15 +832,16 @@ def prepare_target_orchestration_root(args: argparse.Namespace) -> Path:
     target_root = PWL.target_orchestration_root(args.owner, args.repo)
     target_root.parent.mkdir(parents=True, exist_ok=True)
     expected_origin = PWL.target_repo_url(args.owner, args.repo)
+    auth_env = PWL.git_auth_env()
 
     if not target_root.exists():
         log(f"creating per-target orchestration root at {target_root}")
-        PWL.run_cmd(["git", "clone", expected_origin, str(target_root)], cwd=SOURCE_ROOT)
+        PWL.run_cmd(["git", "clone", expected_origin, str(target_root)], cwd=SOURCE_ROOT, env=auth_env)
     elif not (target_root / ".git").exists():
         raise RuntimeError(f"target orchestration root exists but is not a git repo: {target_root}")
 
     PWL.run_cmd(["git", "-C", str(target_root), "remote", "set-url", "origin", expected_origin])
-    PWL.run_cmd(["git", "-C", str(target_root), "fetch", "origin", args.branch_main])
+    PWL.run_cmd(["git", "-C", str(target_root), "fetch", "origin", args.branch_main], env=auth_env)
     branch_check = PWL.run_cmd(
         ["git", "-C", str(target_root), "rev-parse", "--verify", args.branch_main],
         check=False,
@@ -808,7 +850,7 @@ def prepare_target_orchestration_root(args: argparse.Namespace) -> Path:
         PWL.run_cmd(["git", "-C", str(target_root), "checkout", args.branch_main])
     else:
         PWL.run_cmd(["git", "-C", str(target_root), "checkout", "-b", args.branch_main, f"origin/{args.branch_main}"])
-    PWL.run_cmd(["git", "-C", str(target_root), "pull", "--ff-only", "origin", args.branch_main])
+    PWL.run_cmd(["git", "-C", str(target_root), "pull", "--ff-only", "origin", args.branch_main], env=auth_env)
 
     scripts_dir = target_root / ".scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)
@@ -963,6 +1005,9 @@ def parse_args() -> argparse.Namespace:
         default=PWL.AGENT_RESOURCE_MODE,
         help="Slurm resource mode for lb/tr/br Codex jobs",
     )
+    parser.add_argument("--blueprinter-prompt")
+    parser.add_argument("--target-reviewer-prompt")
+    parser.add_argument("--refiner-prompt")
     parser.add_argument("--submit-self", action="store_true", help="submit the Stage 1 orchestrator itself as a Slurm job")
     return parser.parse_args()
 

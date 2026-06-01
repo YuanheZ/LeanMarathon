@@ -48,14 +48,15 @@ The production-ready blueprint file must **strictly** follow the **hard formatti
    end
    ```
 5. Consecutive blueprint nodes are separated by at least one blank line. Equivalently, every node except the final node has a blank line after its declaration before the next `@[blueprint ...]` attribute begins.
+6. Lean comments are forbidden outside blueprint prose fields. The only permitted comment syntax in a production blueprint file is the required `/-- ... -/` value of the `statement`, `proof`, and `title` fields. Do not use `--`, `/- ... -/`, `/-- ... -/`, or `/-! ... -/` anywhere else. Do not archive, disable, or preserve old blueprint nodes by commenting them out; delete obsolete nodes outright.
 
 ### Per-node rules:
-6. Each declaration must be named so its label and Lean name can be matched. Anonymous declarations (e.g. `instance : Foo := …` without a name) are forbidden.
-7. The attribute's `statement` field is present and non-empty.
-8. The attribute's `title` field is present and non-empty.
-9. For `lemma` and `theorem`, the `proof` field is present and non-empty. Definitional nodes need no `proof` field.
-10. The `statement`, `title`, and `proof` text bodies have balanced `{`/`}` (unescaped).
-11. For `lemma` and `theorem`, the declaration body is exactly one of:
+7. Each declaration must be named so its label and Lean name can be matched. Anonymous declarations (e.g. `instance : Foo := …` without a name) are forbidden.
+8. The attribute's `statement` field is present and non-empty.
+9. The attribute's `title` field is present and non-empty.
+10. For `lemma` and `theorem`, the `proof` field is present and non-empty. Definitional nodes need no `proof` field.
+11. The `statement`, `title`, and `proof` text bodies have balanced `{`/`}` (unescaped).
+12. For `lemma` and `theorem`, the declaration body is exactly one of:
     - a multiline placeholder proof:
      ```lean
      := by
@@ -69,8 +70,8 @@ The production-ready blueprint file must **strictly** follow the **hard formatti
     - a complete proof with no real `sorry` or `sorry_using` token.
 
     Same-line placeholder forms such as `:= by sorry` and `:= by sorry_using [...]` are forbidden. Mixed forms (e.g. `by intro; sorry`, `by sorry; trivial`, multiple `sorry_using` in branched tactics) and term-mode `:= sorry` are forbidden.
-12. Definitional nodes (`def`/`abbrev`/`structure`/`inductive`/`class`/`instance`) contain **no** `sorry` or `sorry_using` token anywhere in the signature or body. Definitions must be complete. (Tokens inside string literals and comments are not counted.)
-13. No field name (`statement`, `title`, `proof`, `latexEnv`) appears more than once in the same `@[blueprint ...]` attribute.
+13. Definitional nodes (`def`/`abbrev`/`structure`/`inductive`/`class`/`instance`) contain **no** `sorry` or `sorry_using` token anywhere in the signature or body. Definitions must be complete. (Tokens inside string literals and comments are not counted.)
+14. No field name (`statement`, `title`, `proof`, `latexEnv`) appears more than once in the same `@[blueprint ...]` attribute.
 
 ## Rule 2: `latexEnv` Consistency
 

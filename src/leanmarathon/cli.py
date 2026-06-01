@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -98,6 +99,7 @@ NUMERIC_TOOL_IMPORTS = [
     "faiss",
 ]
 PDF_TOOL_IMPORTS = ["pdfplumber", "fitz", "pdfminer.high_level", "pypdf", "PyPDF2", "pypdfium2"]
+DEFAULT_START_PROMPT = "Begin from Phase 1"
 
 
 def run(
@@ -148,6 +150,13 @@ def target_root(owner: str, repo: str) -> Path:
 
 def target_state_root(owner: str, repo: str) -> Path:
     return SYSTEM_ROOT / ".leanmarathon-targets" / owner / repo
+
+
+def target_worktrees_root(owner: str, repo: str, lean_project_root: Path | str | None = None) -> Path:
+    base = Path(lean_project_root).expanduser().resolve() if lean_project_root else DEFAULT_LEAN_PROJECT_ROOT
+    if base is None:
+        base = SYSTEM_ROOT.parent
+    return base / ".leanmarathon-worktrees" / owner / repo
 
 
 def copy_path_fresh(source: Path, dest: Path) -> None:
@@ -297,7 +306,19 @@ def write_project_config(
     max_review_rounds: int,
     lean_project_root: Path,
     numeric_tools: list[str],
+    agent_prompts: dict[str, str],
 ) -> None:
+    prompt_lines: list[str] = []
+    if agent_prompts:
+        prompt_lines = [
+            "",
+            "[agents.prompts]",
+            *[
+                f"{key} = {toml_quote(value)}"
+                for key, value in sorted(agent_prompts.items())
+                if value
+            ],
+        ]
     write_text_if_changed(
         root / "config.toml",
         "\n".join(
@@ -342,6 +363,7 @@ def write_project_config(
                 "",
                 "[capabilities]",
                 f"numeric_tools = {toml_string_list(numeric_tools)}",
+                *prompt_lines,
                 "",
             ]
         ),
@@ -376,27 +398,115 @@ def cfg_get(config: dict[str, Any], path: tuple[str, ...], default: Any = None) 
     return current
 
 
+def configured_agent_prompts(config: dict[str, Any]) -> dict[str, str]:
+    raw = cfg_get(config, ("agents", "prompts"), {})
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): str(value) for key, value in raw.items() if value is not None}
+
+
+def append_prompt_arg(args: list[str], option: str, prompts: dict[str, str], key: str) -> None:
+    if key in prompts:
+        args.extend([option, prompts[key]])
+
+
+def run_gh(args: list[str]) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["PATH"] = DEFAULT_PATH + (":" + env["PATH"] if env.get("PATH") else "")
+    for key in ("GITHUB_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", "GH_TOKEN"):
+        env.pop(key, None)
+    if os.environ.get("LEANMARATHON_GITHUB_TOKEN"):
+        env["GH_TOKEN"] = os.environ["LEANMARATHON_GITHUB_TOKEN"]
+    try:
+        return subprocess.run(
+            ["gh", *args],
+            cwd=str(SYSTEM_ROOT),
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        return subprocess.CompletedProcess(args=["gh", *args], returncode=127, stdout="", stderr=str(exc))
+
+
+def stored_gh_token() -> str:
+    proc = run_gh(["auth", "token"])
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout.strip()
+
+
+def github_token() -> str:
+    return (
+        os.environ.get("LEANMARATHON_GITHUB_TOKEN", "")
+        or stored_gh_token()
+        or os.environ.get("GITHUB_TOKEN", "")
+        or os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN", "")
+        or os.environ.get("GH_TOKEN", "")
+    )
+
+
+def git_auth_env() -> dict[str, str]:
+    token = github_token()
+    if not token:
+        return {}
+    helper_dir = Path(tempfile.gettempdir()) / "leanmarathon-auth"
+    helper_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    helper = helper_dir / "git-askpass.sh"
+    write_text_if_changed(
+        helper,
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                'case "${1:-}" in',
+                '  *Username*) printf "%s" "x-access-token" ;;',
+                '  *) printf "%s" "${GITHUB_TOKEN:-${GITHUB_PERSONAL_ACCESS_TOKEN:-}}" ;;',
+                "esac",
+                "",
+            ]
+        ),
+    )
+    helper.chmod(0o700)
+    return {
+        "GIT_ASKPASS": str(helper),
+        "GIT_TERMINAL_PROMPT": "0",
+        "GITHUB_TOKEN": token,
+        "GITHUB_PERSONAL_ACCESS_TOKEN": token,
+    }
+
+
 def ensure_github_repo(owner: str, repo: str, private: bool) -> None:
-    view = run(["gh", "repo", "view", f"{owner}/{repo}", "--json", "nameWithOwner"], check=False)
+    view = run_gh(["repo", "view", f"{owner}/{repo}", "--json", "nameWithOwner"])
     if view.returncode == 0:
         log(f"GitHub repo exists: {owner}/{repo}")
         return
+    if view.returncode == 127:
+        raise SystemExit("GitHub repo setup requires gh on the configured PATH")
     visibility = "--private" if private else "--public"
     log(f"creating GitHub repo {owner}/{repo}")
-    run(["gh", "repo", "create", f"{owner}/{repo}", visibility])
+    created = run_gh(["repo", "create", f"{owner}/{repo}", visibility])
+    if created.returncode == 0:
+        return
+    view_after = run_gh(["repo", "view", f"{owner}/{repo}", "--json", "nameWithOwner"])
+    if view_after.returncode == 0:
+        log(f"GitHub repo exists after create race: {owner}/{repo}")
+        return
+    raise SystemExit(f"could not create GitHub repo {owner}/{repo}:\n{created.stderr}")
 
 
 def ensure_target_clone(owner: str, repo: str) -> Path:
     root = target_root(owner, repo)
     root.parent.mkdir(parents=True, exist_ok=True)
     expected = repo_url(owner, repo)
+    auth_env = git_auth_env()
     if root.exists() and (root / ".git").exists():
         run(["git", "remote", "set-url", "origin", expected], cwd=root)
-        run(["git", "fetch", "origin"], cwd=root, check=False)
+        run(["git", "fetch", "origin"], cwd=root, env=auth_env, check=False)
         return root
     if root.exists():
         raise SystemExit(f"target root exists but is not a git repo: {root}")
-    run(["git", "clone", expected, str(root)], cwd=SYSTEM_ROOT)
+    run(["git", "clone", expected, str(root)], cwd=SYSTEM_ROOT, env=auth_env)
     return root
 
 
@@ -418,7 +528,7 @@ def commit_and_push_initial(root: Path) -> None:
         run(["git", "commit", "-m", "Initialize LeanMarathon target"], cwd=root)
     else:
         log("target repo has no initialization changes to commit")
-    run(["git", "push", "-u", "origin", "main"], cwd=root)
+    run(["git", "push", "-u", "origin", "main"], cwd=root, env=git_auth_env())
 
 
 def ensure_git_identity(root: Path) -> None:
@@ -489,6 +599,16 @@ def command_init(args: argparse.Namespace) -> int:
         max_review_rounds=args.max_review_rounds,
         lean_project_root=lean_project_root,
         numeric_tools=numeric_tools,
+        agent_prompts={
+            key: value
+            for key, value in {
+                "blueprinter": args.blueprinter_prompt,
+                "target_reviewer": args.target_reviewer_prompt,
+                "refiner": args.refiner_prompt,
+                "worker": args.worker_prompt,
+            }.items()
+            if value is not None
+        },
     )
     commit_and_push_initial(root)
     print(root)
@@ -578,8 +698,12 @@ def shell_quote_env(value: str) -> str:
 
 
 def github_auth_bootstrap_script() -> str:
-    return """if [[ -z "${GITHUB_TOKEN:-}" && -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1; then
-  _leanmarathon_gh_token="$(gh auth token 2>/dev/null || true)"
+    return """if [[ -n "${LEANMARATHON_GITHUB_TOKEN:-}" ]]; then
+  export GITHUB_TOKEN="$LEANMARATHON_GITHUB_TOKEN"
+  export GITHUB_PERSONAL_ACCESS_TOKEN="$LEANMARATHON_GITHUB_TOKEN"
+fi
+if [[ -z "${GITHUB_TOKEN:-}" && -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1; then
+  _leanmarathon_gh_token="$(env -u GITHUB_TOKEN -u GITHUB_PERSONAL_ACCESS_TOKEN -u GH_TOKEN gh auth token 2>/dev/null || true)"
   if [[ -n "$_leanmarathon_gh_token" ]]; then
     export GITHUB_TOKEN="$_leanmarathon_gh_token"
     export GITHUB_PERSONAL_ACCESS_TOKEN="$_leanmarathon_gh_token"
@@ -591,6 +715,20 @@ if [[ -n "${GITHUB_TOKEN:-}" && -z "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]]; then
 fi
 if [[ -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" && -z "${GITHUB_TOKEN:-}" ]]; then
   export GITHUB_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"
+fi
+if [[ -n "${GITHUB_TOKEN:-}" || -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]]; then
+  _leanmarathon_askpass="${TMPDIR:-/tmp}/leanmarathon-git-askpass-${USER:-user}.sh"
+  cat > "$_leanmarathon_askpass" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  *Username*) printf "%s" "x-access-token" ;;
+  *) printf "%s" "${GITHUB_TOKEN:-${GITHUB_PERSONAL_ACCESS_TOKEN:-}}" ;;
+esac
+EOF
+  chmod 700 "$_leanmarathon_askpass"
+  export GIT_ASKPASS="$_leanmarathon_askpass"
+  export GIT_TERMINAL_PROMPT=0
+  unset _leanmarathon_askpass
 fi"""
 
 
@@ -616,6 +754,11 @@ def auto_forward_args(args: argparse.Namespace, *, submit: bool) -> list[str]:
 
 def submit_auto_job(args: argparse.Namespace, config: dict[str, Any]) -> int:
     env = runtime_env(config)
+    submit_env = os.environ.copy()
+    if not submit_env.get("LEANMARATHON_GITHUB_TOKEN"):
+        token = github_token()
+        if token:
+            submit_env["LEANMARATHON_GITHUB_TOKEN"] = token
     resource = str(cfg_get(config, ("hpc", "auto", "resource"), "cpu"))
     account = slurm_account(resource)
     account_line = f"#SBATCH --account={account}" if account else ""
@@ -636,7 +779,7 @@ def submit_auto_job(args: argparse.Namespace, config: dict[str, Any]) -> int:
     for key, value in env.items():
         exports.append(f"export {key}={shell_quote_env(str(value))}")
     for key, value in sorted(os.environ.items()):
-        if key.startswith("LEANMARATHON_"):
+        if key.startswith("LEANMARATHON_") and key != "LEANMARATHON_GITHUB_TOKEN":
             exports.append(f"export {key}={shell_quote_env(value)}")
 
     script.write_text(
@@ -666,7 +809,7 @@ def submit_auto_job(args: argparse.Namespace, config: dict[str, Any]) -> int:
         encoding="utf-8",
     )
     script.chmod(0o755)
-    proc = run(["sbatch", "--parsable", str(script)], check=False)
+    proc = run(["sbatch", "--parsable", "--export=ALL", str(script)], env=submit_env, check=False)
     if proc.returncode != 0:
         print(proc.stderr, file=sys.stderr, end="")
         return proc.returncode
@@ -732,6 +875,10 @@ def run_script_from_config(
         extra_args=extra_args,
         submit=submit,
     )
+    if not env.get("LEANMARATHON_GITHUB_TOKEN") and not os.environ.get("LEANMARATHON_GITHUB_TOKEN"):
+        token = github_token()
+        if token:
+            env["LEANMARATHON_GITHUB_TOKEN"] = token
     proc = run(command, cwd=SYSTEM_ROOT, env=env, check=False)
     if proc.stdout:
         print(proc.stdout, end="")
@@ -751,6 +898,15 @@ def script_command_from_config(
     config = load_target_config(owner, repo)
     project = config["project"]
     stage = "stage1" if script_name == "stage1_blueprint_loop.py" else "stage2"
+    prompts = configured_agent_prompts(config)
+    prompt_args: list[str] = []
+    if stage == "stage1":
+        append_prompt_arg(prompt_args, "--blueprinter-prompt", prompts, "blueprinter")
+        append_prompt_arg(prompt_args, "--target-reviewer-prompt", prompts, "target_reviewer")
+        append_prompt_arg(prompt_args, "--refiner-prompt", prompts, "refiner")
+    else:
+        append_prompt_arg(prompt_args, "--worker-prompt", prompts, "worker")
+        append_prompt_arg(prompt_args, "--refiner-prompt", prompts, "refiner")
     command = [
         sys.executable,
         str(SYSTEM_ROOT / ".scripts" / script_name),
@@ -764,6 +920,9 @@ def script_command_from_config(
         str(project["problem_file"]),
         "--proof-file",
         str(project["proof_file"]),
+        "--worktrees-root",
+        str(target_worktrees_root(owner, repo, project["lean_project_root"])),
+        *prompt_args,
         *extra_args,
     ]
     if submit:
@@ -1001,6 +1160,10 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--batch-size", type=int, default=16)
     init.add_argument("--max-rounds", type=int, default=100)
     init.add_argument("--max-review-rounds", type=int, default=20)
+    init.add_argument("--blueprinter-prompt")
+    init.add_argument("--target-reviewer-prompt")
+    init.add_argument("--refiner-prompt")
+    init.add_argument("--worker-prompt")
     init.set_defaults(func=command_init)
 
     stage1 = sub.add_parser("stage1", help="Stage 1 commands")
