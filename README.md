@@ -6,7 +6,7 @@
 
 LeanMarathon is an multi-agent harness system for turning a natural-language mathematical proof into fully-proven Lean 4 blueprint with parallel Codex agents. [[Paper]](paper.pdf)
 
-![LeanMarathon orchestration overview](figs/pipeline_overview.png)
+![LeanMarathon orchestration overview](figs/pipeline-overview.png)
 
 LeanMarathon manages GitHub repositories, sparse worktrees, Slurm jobs, Codex agent workspaces, runtime inputs, audit logs, and CI handoffs. User can operate the system through `leanmarathon` commands and a small local config file.
 
