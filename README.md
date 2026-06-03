@@ -443,7 +443,7 @@ Important run files for observability:
 | `.orchestrator-runs/**/result.json` | Stage 2 machine-readable result. |
 | `.orchestrator-runs/**/audit.jsonl` or `stage1_audit.jsonl` | Round-by-round audit entries. |
 
-## Resume And Cleanup
+## Resume and Cleanup
 
 For normal resume:
 
