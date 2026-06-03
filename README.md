@@ -14,7 +14,7 @@ LeanMarathon manages GitHub repositories, sparse worktrees, Slurm jobs, Codex ag
 
 | Target | Result |
 | --- | --- |
-| [Erdős-Graham](https://arxiv.org/abs/2601.21442) | [Erdos1196](https://github.com/YuanheZ/ErdosGraham) |
+| [Erdős-Graham](https://arxiv.org/abs/2601.21442) | [ErdosGraham](https://github.com/YuanheZ/ErdosGraham) |
 | [Erdős #1196](https://arxiv.org/abs/2605.00301) | [Erdos1196](https://github.com/YuanheZ/Erdos1196) |
 | [Erdős #164 & #1217](https://arxiv.org/abs/2605.00301) | [Prim](https://github.com/YuanheZ/Prim) |
 
