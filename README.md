@@ -10,6 +10,14 @@ LeanMarathon is an multi-agent harness system for turning a natural-language mat
 
 LeanMarathon manages GitHub repositories, sparse worktrees, Slurm jobs, Codex agent workspaces, runtime inputs, audit logs, and CI handoffs. User can operate the system through `leanmarathon` commands and a small local config file.
 
+## Deliveries
+
+| Target | Result |
+| --- | --- |
+| [Erdős-Graham](https://arxiv.org/abs/2601.21442) | [Erdos1196](https://github.com/YuanheZ/ErdosGraham) |
+| [Erdős #1196](https://arxiv.org/abs/2605.00301) | [Erdos1196](https://github.com/YuanheZ/Erdos1196) |
+| [Erdős #164 & #1217](https://arxiv.org/abs/2605.00301) | [Prim](https://github.com/YuanheZ/Prim) |
+
 ## Repository Layout
 
 | Path | Purpose |
