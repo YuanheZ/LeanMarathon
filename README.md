@@ -4,7 +4,7 @@
   <img src="figs/logo.png" alt="LeanMarathon logo" width="720">
 </p>
 
-LeanMarathon is an multi-agent harness system for turning a natural-language mathematical proof into fully-proven Lean 4 blueprint with parallel Codex agents.
+LeanMarathon is an multi-agent harness system for turning a natural-language mathematical proof into fully-proven Lean 4 blueprint with parallel Codex agents. [[Paper]](paper.pdf)
 
 ![LeanMarathon orchestration overview](figs/orchestration_system.png)
 
