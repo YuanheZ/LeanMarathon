@@ -73,7 +73,7 @@ LeanMarathon expects the following tool versions:
 | `github-mcp-server` | `0.32.0` |
 | `git-mcp-server` | `2.10.5` |
 
-LeanMarathon does not pin the Lean version. You must provide a Lean project root containing:
+LeanMarathon does not pin the Lean version. You must provide a Lean project root with compatible [LeanArchitect](https://github.com/hanwenzhu/LeanArchitect) containing:
 
 ```text
 lakefile.toml
